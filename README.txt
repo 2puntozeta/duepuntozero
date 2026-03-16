@@ -1,51 +1,40 @@
-GESTIONALE PRIVATO 2.0 – SUPABASE V1
+GESTIONALE PRIVATO 2.0 – V4 AUTO ONBOARDING
 
-CONTENUTO
+NOVITÀ
+- il cliente in registrazione crea automaticamente la propria ditta
+- la Partita IVA è facoltativa
+- il supervisor centrale viene collegato automaticamente alle nuove ditte
+- il cliente vede solo la propria ditta
+- il supervisor vede la schermata selezione ditta
+
+FILE
 - index.html
 - styles.css
 - app.js
 - config.js
 - schema_supabase.sql
+- setup_supervisor.sql
 - README.txt
 
-COME FARE
-1. Crea un progetto su Supabase.
-2. Apri SQL Editor su Supabase.
-3. Incolla tutto il contenuto di schema_supabase.sql ed eseguilo.
-4. In Authentication:
-   - abilita Email/Password
-   - puoi disattivare la conferma email se vuoi entrare subito
-5. Apri Project Settings > API
-6. Copia:
-   - Project URL
-   - anon public key
-7. Apri config.js
-8. Incolla URL e anon key al posto dei placeholder.
-9. Carica tutti i file su GitHub.
-10. Pubblica il repository su Vercel, Netlify o GitHub Pages.
+FLUSSO GIUSTO
+1. crea progetto Supabase
+2. esegui schema_supabase.sql
+3. metti Project URL e anon key in config.js
+4. pubblica l'app
+5. registra prima il TUO account supervisor dall'app
+6. esegui setup_supervisor.sql cambiando la tua email
+7. da quel momento ogni nuova registrazione cliente:
+   - crea profilo
+   - crea ditta
+   - collega il cliente come owner
+   - collega te come supervisor
 
-IMPORTANTE
-- Questa versione è pensata per un solo utente.
-- I dati vengono salvati online su Supabase.
-- Se apri la web app da telefono e PC, vedi gli stessi dati.
+CAMPI REGISTRAZIONE CLIENTE
+- nome ditta (obbligatorio)
+- partita IVA (facoltativa)
+- telefono (facoltativo)
+- email (obbligatoria)
+- password (obbligatoria)
 
-SE USI GITHUB PAGES
-Funziona perché questa è una web app statica.
-
-SE VUOI ANDARE VELOCE
-- Supabase
-- GitHub
-- Vercel
-è il flusso più semplice.
-
-NOTE TECNICHE
-- Il file config.js contiene URL e anon key pubblica.
-- La anon key pubblica è pensata per il frontend, ma la protezione vera è fatta dalle policy RLS nel database.
-- Non inserire mai la service_role key nel frontend.
-
-PROSSIMO STEP POSSIBILE
-- allegati fatture
-- cancellazione/modifica record
-- inventario
-- statistiche
-- dashboard più avanzata
+NOTA
+Se su Supabase lasci attiva la conferma email, il cliente potrebbe dover confermare l'email prima del login.
