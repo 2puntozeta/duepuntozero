@@ -547,12 +547,21 @@ function renderSuppliers(){
       <td>${euro(sosp)}</td>
       <td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td>
       <td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td>
-      <td><button class="btn ghost supplier-edit-btn" data-supplier-name="${s.nome}" style="padding:6px 10px;">Modifica</button></td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn ghost supplier-edit-btn" data-supplier-name="${s.nome}" style="padding:6px 10px;">Modifica</button>
+        <button class="btn ghost supplier-delete-btn" data-supplier-name="${s.nome}" style="padding:6px 10px;">Elimina</button>
+      </td>
     </tr>`;
   }).join("");
 
   document.querySelectorAll(".supplier-edit-btn").forEach(btn => {
-    btn.addEventListener("click", () => editSupplierByName(btn.dataset.supplierName));
+    btn.addEventListener("click", () => {
+      const supplier = state.suppliers.find(s => s.nome === btn.dataset.supplierName);
+      if (supplier) startSupplierEdit(supplier);
+    });
+  });
+  document.querySelectorAll(".supplier-delete-btn").forEach(btn => {
+    btn.addEventListener("click", () => deleteSupplierByName(btn.dataset.supplierName));
   });
 }
 
@@ -574,12 +583,21 @@ function renderEmployees(){
       <td>${euro(e.dovuto_mensile)}</td>
       <td>${euro(pagato)}</td>
       <td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td>
-      <td><button class="btn ghost employee-edit-btn" data-employee-name="${e.nome}" style="padding:6px 10px;">Modifica</button></td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn ghost employee-edit-btn" data-employee-name="${e.nome}" style="padding:6px 10px;">Modifica</button>
+        <button class="btn ghost employee-delete-btn" data-employee-name="${e.nome}" style="padding:6px 10px;">Elimina</button>
+      </td>
     </tr>`;
   }).join("");
 
   document.querySelectorAll(".employee-edit-btn").forEach(btn => {
-    btn.addEventListener("click", () => editEmployeeByName(btn.dataset.employeeName));
+    btn.addEventListener("click", () => {
+      const employee = state.employees.find(e => e.nome === btn.dataset.employeeName);
+      if (employee) startEmployeeEdit(employee);
+    });
+  });
+  document.querySelectorAll(".employee-delete-btn").forEach(btn => {
+    btn.addEventListener("click", () => deleteEmployeeByName(btn.dataset.employeeName));
   });
 }
 
@@ -659,8 +677,10 @@ function bindEvents(){
   safeEl("saveNewCashBtn")?.addEventListener("click", saveNewCash);
   safeEl("saveMovBtn")?.addEventListener("click", saveCashMovement);
   safeEl("saveFornBtn")?.addEventListener("click", saveSupplier);
+  safeEl("cancelFornEditBtn")?.addEventListener("click", resetSupplierForm);
   safeEl("saveFornMovBtn")?.addEventListener("click", saveSupplierMovement);
   safeEl("saveDipBtn")?.addEventListener("click", saveEmployee);
+  safeEl("cancelDipEditBtn")?.addEventListener("click", resetEmployeeForm);
   safeEl("saveDipMovBtn")?.addEventListener("click", saveEmployeeMovement);
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
