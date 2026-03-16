@@ -1,5 +1,5 @@
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
 const SUPABASE_URL = "https://qhgnyldwpjitiigxvzed.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek";
@@ -28,6 +28,26 @@ const euro = (v) => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EU
 const n = (v) => Number(v || 0);
 const todayStr = () => new Date().toISOString().slice(0,10);
 const isSupervisor = () => state.profile?.global_role === "supervisor";
+
+function showFatalError(message){
+  const boot = document.getElementById("bootScreen");
+  if(boot){
+    boot.classList.remove("hidden");
+    const card = boot.querySelector(".login-card");
+    if(card){
+      card.innerHTML = `
+        <div class="brand" style="margin-bottom:18px;">
+          <div class="logo">G2</div>
+          <div><h1>Gestionale Privato 2.0</h1><p>Errore di avvio</p></div>
+        </div>
+        <h1>Errore di caricamento</h1>
+        <p style="white-space:pre-wrap">${String(message)}</p>
+      `;
+    }
+  }
+}
+window.addEventListener("error", (e) => showFatalError(e.message || "Errore JavaScript"));
+window.addEventListener("unhandledrejection", (e) => showFatalError(e.reason?.message || e.reason || "Promise rifiutata"));
 
 function showGlobalMessage(message, type="ok"){
   $("globalFeedback").innerHTML = `<div class="alert ${type === "ok" ? "okline" : ""}">${message}</div>`;
@@ -648,12 +668,17 @@ function bindEvents(){
 }
 
 async function main(){
-  bindEvents();
-  seedFields();
-  const ok = await initSupabase();
-  if(!ok) return;
-  supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
-  if(state.session) await bootstrapAfterAuth();
-  else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  try{
+    bindEvents();
+    seedFields();
+    const ok = await initSupabase();
+    if(!ok) return;
+    supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
+    if(state.session) await bootstrapAfterAuth();
+    else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  } catch (err){
+    console.error(err);
+    showFatalError(err?.message || err);
+  }
 }
 main();
