@@ -36,6 +36,36 @@ const euro = (v) =>
   new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(Number(v || 0));
 const isSupervisor = () => state.profile?.global_role === "supervisor";
 
+const REMEMBER_EMAIL_KEY = "gestionale_remember_email";
+const REMEMBER_EMAIL_VALUE_KEY = "gestionale_remember_email_value";
+
+function loadRememberedEmail() {
+  try {
+    const remembered = localStorage.getItem(REMEMBER_EMAIL_KEY) === "1";
+    const email = localStorage.getItem(REMEMBER_EMAIL_VALUE_KEY) || "";
+    if (safeEl("rememberEmailChk")) $("rememberEmailChk").checked = remembered;
+    if (remembered && email && safeEl("loginEmail")) $("loginEmail").value = email;
+  } catch (err) {
+    console.error("Remember email load error:", err);
+  }
+}
+
+function saveRememberedEmail() {
+  try {
+    const shouldRemember = !!safeEl("rememberEmailChk")?.checked;
+    if (shouldRemember) {
+      localStorage.setItem(REMEMBER_EMAIL_KEY, "1");
+      localStorage.setItem(REMEMBER_EMAIL_VALUE_KEY, safeEl("loginEmail")?.value?.trim() || "");
+    } else {
+      localStorage.removeItem(REMEMBER_EMAIL_KEY);
+      localStorage.removeItem(REMEMBER_EMAIL_VALUE_KEY);
+    }
+  } catch (err) {
+    console.error("Remember email save error:", err);
+  }
+}
+
+
 function showGlobalMessage(message, type = "ok") {
   const el = safeEl("globalFeedback");
   if (!el) return;
@@ -219,6 +249,7 @@ async function login() {
     password: $("loginPassword").value.trim()
   });
   if (error) return showAuthMessage(error.message, true);
+  saveRememberedEmail();
   state.session = data.session;
   await bootstrapAfterAuth();
 }
@@ -237,6 +268,7 @@ async function register() {
   showAuthMessage("Account creato. Se la conferma email è disattivata, puoi fare login subito.");
   setAuthTab("login");
   $("loginEmail").value = email;
+  saveRememberedEmail();
 }
 async function logout() {
   await supabase.auth.signOut();
@@ -901,6 +933,8 @@ function bindEvents() {
   document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", ()=>navigate(btn.dataset.section)));
   document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", ()=>setAuthTab(btn.dataset.authTab)));
   safeEl("loginBtn")?.addEventListener("click", login);
+  safeEl("rememberEmailChk")?.addEventListener("change", saveRememberedEmail);
+  safeEl("loginEmail")?.addEventListener("input", () => { if (safeEl("rememberEmailChk")?.checked) saveRememberedEmail(); });
   safeEl("registerBtn")?.addEventListener("click", register);
   safeEl("logoutBtn")?.addEventListener("click", logout);
   safeEl("selectorLogoutBtn")?.addEventListener("click", logout);
@@ -937,6 +971,7 @@ async function main() {
   try {
     bindEvents();
     seedFields();
+    loadRememberedEmail();
     const ok = await initSupabase();
     if (!ok) return;
     supabase.auth.onAuthStateChange(async (_event, session)=>{ state.session = session; });

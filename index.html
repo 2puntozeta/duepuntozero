@@ -34,35 +34,36 @@
       <div id="loginTab" class="auth-tab">
         <div class="field">
           <label>Email</label>
-          <input id="loginEmail" type="email" placeholder="nome@email.com" />
+          <input id="loginEmail" type="email" placeholder="nome@email.com" autocomplete="username email" inputmode="email" />
         </div>
         <div class="field">
           <label>Password</label>
-          <input id="loginPassword" type="password" placeholder="Password" />
+          <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
         </div>
+        <div class="toolbar" style="margin-top:10px;"><label style="display:flex;gap:8px;align-items:center;font-size:14px;"><input id="rememberEmailChk" type="checkbox" style="width:auto;padding:0;" /> Ricorda email su questo dispositivo</label></div>
         <button id="loginBtn">Entra</button>
       </div>
 
       <div id="registerTab" class="auth-tab hidden">
         <div class="field">
           <label>Nome ditta</label>
-          <input id="registerCompanyName" placeholder="es. Pizzeria" />
+          <input id="registerCompanyName" placeholder="es. Pizzeria" autocomplete="organization" />
         </div>
         <div class="field">
           <label>Partita IVA (facoltativa)</label>
-          <input id="registerVatNumber" placeholder="facoltativa" />
+          <input id="registerVatNumber" placeholder="facoltativa" autocomplete="off" />
         </div>
         <div class="field">
           <label>Telefono (facoltativo)</label>
-          <input id="registerPhone" placeholder="facoltativo" />
+          <input id="registerPhone" placeholder="facoltativo" autocomplete="tel" inputmode="tel" />
         </div>
         <div class="field">
           <label>Email</label>
-          <input id="registerEmail" type="email" placeholder="nome@email.com" />
+          <input id="registerEmail" type="email" placeholder="nome@email.com" autocomplete="username email" inputmode="email" />
         </div>
         <div class="field">
           <label>Password</label>
-          <input id="registerPassword" type="password" placeholder="Password" />
+          <input id="registerPassword" type="password" placeholder="Password" autocomplete="new-password" />
         </div>
         <button id="registerBtn">Crea account e ditta</button>
       </div>
