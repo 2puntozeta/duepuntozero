@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gestionale Privato 2.0 – V4 Auto Onboarding</title>
+  <title>Gestionale Privato 2.0 – Multi Company V2</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -13,31 +13,30 @@
         <div class="logo">G2</div>
         <div>
           <h1>Gestionale Privato 2.0</h1>
-          <p>V4 – Auto onboarding aziende</p>
+          <p>Multi Company – V2</p>
         </div>
       </div>
       <h1>Configurazione iniziale</h1>
       <p>Inserisci URL e anon key di Supabase nel file <strong>config.js</strong>, poi ricarica la pagina.</p>
-      <div class="footer-note">La registrazione crea automaticamente la ditta e collega il supervisor centrale.</div>
     </div>
   </div>
 
   <div id="authView" class="login-wrap hidden">
-    <div class="login-card" style="width:min(560px,100%)">
+    <div class="login-card">
       <div class="brand" style="margin-bottom:18px;">
         <div class="logo">G2</div>
         <div>
           <h1>Gestionale Privato 2.0</h1>
-          <p>V4 – Auto onboarding aziende</p>
+          <p>Multi Company – V2</p>
         </div>
       </div>
 
       <h1>Accesso</h1>
-      <p>Il cliente in registrazione crea automaticamente la propria ditta. La Partita IVA è facoltativa.</p>
+      <p>Registrazione e login con email e password.</p>
 
       <div class="tab-switch">
         <button class="tab-btn active" data-auth-tab="login">Login</button>
-        <button class="tab-btn" data-auth-tab="register">Registrazione azienda</button>
+        <button class="tab-btn" data-auth-tab="register">Registrazione</button>
       </div>
 
       <div id="loginTab" class="auth-tab active">
@@ -50,12 +49,9 @@
 
       <div id="registerTab" class="auth-tab hidden">
         <div style="display:grid;gap:12px;">
-          <div><label>Nome ditta</label><input id="registerCompanyName" placeholder="es. Pizzeria Armogida" /></div>
-          <div><label>Partita IVA (facoltativa)</label><input id="registerVatNumber" placeholder="es. IT12345678901" /></div>
-          <div><label>Telefono (facoltativo)</label><input id="registerPhone" placeholder="es. 3331234567" /></div>
           <div><label>Email</label><input id="registerEmail" type="email" placeholder="nome@email.com" /></div>
           <div><label>Password</label><input id="registerPassword" type="password" placeholder="Password" /></div>
-          <button id="registerBtn">Crea account e ditta</button>
+          <button id="registerBtn">Crea account</button>
         </div>
       </div>
 
@@ -91,7 +87,7 @@
         <div class="logo">G2</div>
         <div>
           <h1>Gestionale Privato 2.0</h1>
-          <p>V4 – Auto onboarding aziende</p>
+          <p>Multi Company – V2</p>
         </div>
       </div>
 
@@ -363,10 +359,37 @@
 
         <div class="split-2" style="margin-top:16px;">
           <div class="card"><h3 class="section-title">Riepilogo operativo</h3><div id="reportSummary" class="list"></div></div>
-          <div class="card"><h3 class="section-title">Note</h3><div class="alert okline">Il supervisor vede la selezione ditta. I clienti normali entrano direttamente nella propria ditta.</div></div>
+          <div class="card"><h3 class="section-title">Note</h3><div class="alert okline">Il supervisor può cambiare ditta. Gli altri utenti entrano direttamente nel proprio gestionale.</div></div>
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="alertModal" class="login-wrap hidden" style="background:rgba(2,6,23,.78);position:fixed;inset:0;z-index:2000;">
+    <div class="login-card" style="width:min(760px,100%);">
+      <div class="toolbar">
+        <div>
+          <h1 style="margin:0;font-size:24px;">Dettaglio alert giornata</h1>
+          <p id="alertModalDate" class="muted" style="margin:6px 0 0;">Data giornata</p>
+        </div>
+        <button class="btn secondary" id="closeAlertModalBtn">Chiudi</button>
+      </div>
+
+      <div class="card" style="margin-top:14px;padding:14px;">
+        <h3 class="section-title" style="margin:0 0 10px 0;">Perché è uscito l'alert</h3>
+        <div id="alertReasons" class="list"></div>
+      </div>
+
+      <div class="card" style="margin-top:14px;padding:14px;">
+        <h3 class="section-title" style="margin:0 0 10px 0;">Riepilogo rapido</h3>
+        <div id="alertQuickSummary" class="list"></div>
+      </div>
+
+      <div class="toolbar" style="margin-top:14px;">
+        <div class="muted tiny">Puoi caricare automaticamente i dati nel form per correggere la giornata.</div>
+        <button id="editAlertDayBtn">Modifica questa giornata</button>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="./app.js"></script>

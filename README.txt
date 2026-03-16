@@ -1,11 +1,10 @@
-GESTIONALE PRIVATO 2.0 – V4 AUTO ONBOARDING
+GESTIONALE PRIVATO 2.0 – MULTI COMPANY V2
 
-NOVITÀ
-- il cliente in registrazione crea automaticamente la propria ditta
-- la Partita IVA è facoltativa
-- il supervisor centrale viene collegato automaticamente alle nuove ditte
-- il cliente vede solo la propria ditta
-- il supervisor vede la schermata selezione ditta
+COSA CAMBIA
+- Ogni ditta ha il suo gestionale separato.
+- Tu, come supervisor, puoi entrare in più ditte.
+- I clienti normali entrano direttamente nella loro ditta.
+- La schermata "seleziona ditta" compare solo al supervisor o a chi ha più ditte collegate.
 
 FILE
 - index.html
@@ -13,28 +12,37 @@ FILE
 - app.js
 - config.js
 - schema_supabase.sql
-- setup_supervisor.sql
+- admin_setup_examples.sql
 - README.txt
 
-FLUSSO GIUSTO
-1. crea progetto Supabase
-2. esegui schema_supabase.sql
-3. metti Project URL e anon key in config.js
-4. pubblica l'app
-5. registra prima il TUO account supervisor dall'app
-6. esegui setup_supervisor.sql cambiando la tua email
-7. da quel momento ogni nuova registrazione cliente:
-   - crea profilo
-   - crea ditta
-   - collega il cliente come owner
-   - collega te come supervisor
+COME FARE
+1. Crea progetto Supabase.
+2. Incolla schema_supabase.sql nello SQL Editor.
+3. In Auth abilita Email/Password.
+4. In config.js metti Project URL e anon key.
+5. Registra gli account dall'app:
+   - il tuo account supervisor
+   - gli account dei clienti
+6. Poi apri admin_setup_examples.sql e usa le query di esempio per:
+   - creare le ditte
+   - impostare il tuo profilo come supervisor
+   - collegare ogni account alla propria ditta
 
-CAMPI REGISTRAZIONE CLIENTE
-- nome ditta (obbligatorio)
-- partita IVA (facoltativa)
-- telefono (facoltativo)
-- email (obbligatoria)
-- password (obbligatoria)
+LOGICA ACCESSI
+- supervisor: può scegliere tra più ditte
+- cliente normale: entra direttamente nel proprio gestionale
+- ogni tabella operativa è filtrata da company_id
+- le policy RLS impediscono l'accesso a ditte non collegate
 
-NOTA
-Se su Supabase lasci attiva la conferma email, il cliente potrebbe dover confermare l'email prima del login.
+IMPORTANTE
+- questa versione non ha ancora pannello admin per creare ditte dentro l'interfaccia
+- la creazione ditte e assegnazioni iniziali si fa da SQL
+- è la base giusta per crescere senza mischiare i dati
+
+V5 ALERT + MODIFICA GIORNATA
+- dalla dashboard puoi cliccare su un alert
+- si apre il dettaglio con le motivazioni
+- puoi premere "Modifica questa giornata"
+- il form della scheda giornaliera viene compilato automaticamente
+- correggi e premi di nuovo "Salva giornata"
+- dalla tabella giornate puoi cliccare direttamente sulla data per ricaricare la giornata nel form

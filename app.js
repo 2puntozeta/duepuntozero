@@ -53,7 +53,6 @@ function seedFields(){
     $("reportYear").value = new Date().getFullYear();
   }
 }
-
 function navigate(sectionId){
   document.querySelectorAll(".section").forEach(s=>s.classList.remove("active"));
   $(sectionId).classList.add("active");
@@ -70,7 +69,6 @@ function navigate(sectionId){
   $("pageTitle").textContent = meta[sectionId][0];
   $("pageSubtitle").textContent = meta[sectionId][1];
 }
-
 function getDailyTotals(rec){
   const pranzoInc = n(rec.pranzo.contanti)+n(rec.pranzo.pos);
   const cenaInc = n(rec.cena.contanti)+n(rec.cena.pos);
@@ -93,6 +91,71 @@ function validateDaily(rec){
   if(paymentNoService) alerts.push("Sono presenti incassi in una colonna con 0 coperti e 0 asporto.");
   if(totals.totalIncasso <= 0 && copertiTot > 0) alerts.push("Ci sono coperti ma l'incasso totale è zero.");
   return alerts;
+}
+
+function fillDailyForm(rec){
+  $("gData").value = rec.data || "";
+  $("gPizze").value = rec.pizze ?? 0;
+  $("gCopertiRistorante").value = rec.copertiRistorante ?? 0;
+  $("gMenu").value = rec.menu ?? 0;
+  $("gSupplementi").value = rec.supplementi ?? 0;
+  $("gPortate").value = rec.portate ?? 0;
+  $("gBancone").value = rec.bancone ?? 0;
+  $("gNote").value = rec.note || "";
+
+  $("pranzoCoperti").value = rec.pranzo?.coperti ?? 0;
+  $("pranzoAsporto").value = rec.pranzo?.asporto ?? 0;
+  $("pranzoContanti").value = rec.pranzo?.contanti ?? 0;
+  $("pranzoPos").value = rec.pranzo?.pos ?? 0;
+
+  $("cenaCoperti").value = rec.cena?.coperti ?? 0;
+  $("cenaAsporto").value = rec.cena?.asporto ?? 0;
+  $("cenaContanti").value = rec.cena?.contanti ?? 0;
+  $("cenaPos").value = rec.cena?.pos ?? 0;
+
+  $("banchettiCoperti").value = rec.banchetti?.coperti ?? 0;
+  $("banchettiAsporto").value = rec.banchetti?.asporto ?? 0;
+  $("banchettiContanti").value = rec.banchetti?.contanti ?? 0;
+  $("banchettiPos").value = rec.banchetti?.pos ?? 0;
+}
+function openAlertModalByDate(dateStr){
+  const rec = state.dailyRecords.find(r => r.data === dateStr);
+  if(!rec) return;
+  selectedAlertRecord = rec;
+  const alerts = validateDaily(rec);
+  const totals = getDailyTotals(rec);
+
+  $("alertModalDate").textContent = `Giornata: ${rec.data}`;
+  $("alertReasons").innerHTML = alerts.length
+    ? alerts.map(a => `<div class="item"><div><strong>Alert</strong><small>${a}</small></div></div>`).join("")
+    : `<div class="alert okline">Nessun alert attivo per questa giornata.</div>`;
+
+  const summaryItems = [
+    ["Coperti totali", totals.totalCoperti],
+    ["Coperti ristorante", rec.copertiRistorante ?? 0],
+    ["Incasso totale", euro(totals.totalIncasso)],
+    ["Pizze", rec.pizze ?? 0],
+    ["Menù / Supplementi", `${rec.menu ?? 0} / ${rec.supplementi ?? 0}`],
+    ["Pranzo", `Coperti ${rec.pranzo?.coperti ?? 0} · Contanti ${euro(rec.pranzo?.contanti ?? 0)} · POS ${euro(rec.pranzo?.pos ?? 0)}`],
+    ["Cena", `Coperti ${rec.cena?.coperti ?? 0} · Contanti ${euro(rec.cena?.contanti ?? 0)} · POS ${euro(rec.cena?.pos ?? 0)}`],
+    ["Banchetti", `Coperti ${rec.banchetti?.coperti ?? 0} · Contanti ${euro(rec.banchetti?.contanti ?? 0)} · POS ${euro(rec.banchetti?.pos ?? 0)}`],
+  ];
+  $("alertQuickSummary").innerHTML = summaryItems.map(([t,v]) => `<div class="item"><div><strong>${t}</strong></div><div>${v}</div></div>`).join("");
+  $("alertModal").classList.remove("hidden");
+}
+function closeAlertModal(){
+  $("alertModal").classList.add("hidden");
+}
+function editSelectedAlertDay(){
+  if(!selectedAlertRecord) return;
+  fillDailyForm(selectedAlertRecord);
+  closeAlertModal();
+  navigate("giornaliera");
+  const fb = $("giornalieraFeedback");
+  if(fb){
+    fb.innerHTML = `<div class="alert okline">Hai caricato la giornata ${selectedAlertRecord.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 function supplierSuspeso(s){
   const moves = state.supplierMovements.filter(m => m.supplier_id === s.id);
@@ -137,35 +200,10 @@ async function login(){
   state.session = data.session;
   await bootstrapAfterAuth();
 }
-async function registerCompany(){
-  const companyName = $("registerCompanyName").value.trim();
-  const vatNumber = $("registerVatNumber").value.trim();
-  const phone = $("registerPhone").value.trim();
-  const email = $("registerEmail").value.trim();
-  const password = $("registerPassword").value.trim();
-
-  if(!companyName || !email || !password){
-    showAuthMessage("Compila almeno nome ditta, email e password.", true);
-    return;
-  }
-
-  const { error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        company_name: companyName,
-        vat_number: vatNumber,
-        phone
-      }
-    }
-  });
-
+async function register(){
+  const { error } = await supabase.auth.signUp({ email: $("registerEmail").value.trim(), password: $("registerPassword").value.trim() });
   if(error){ showAuthMessage(error.message, true); return; }
-
-  showAuthMessage("Registrazione completata. Se la conferma email è disattivata puoi fare login subito. La ditta verrà creata e collegata automaticamente.");
-  setAuthTab("login");
-  $("loginEmail").value = email;
+  showAuthMessage("Account creato. Se la conferma email è disattivata, puoi fare login subito.");
 }
 async function logout(){
   await supabase.auth.signOut();
@@ -206,9 +244,8 @@ function renderCompanySelector(){
 async function bootstrapAfterAuth(){
   await fetchProfileAndMemberships();
   if(state.memberships.length === 0){
-    hideAllViews();
-    $("authView").classList.remove("hidden");
-    showAuthMessage("Questo account non è collegato a nessuna ditta. Controlla la configurazione SQL del supervisor o riprova dopo la creazione automatica.", true);
+    hideAllViews(); $("authView").classList.remove("hidden");
+    showAuthMessage("Questo account non è collegato a nessuna ditta. Devi associarlo dal database.", true);
     return;
   }
   if(isSupervisor() || state.memberships.length > 1){
@@ -371,6 +408,7 @@ async function importBackup(file){
     for(const rec of (data.dailyRecords || [])) await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
     if(data.cashInitial) for(const [kind, amount] of Object.entries(data.cashInitial)) await supabase.from("cash_state").upsert({ company_id: state.activeCompany.id, kind, amount }, { onConflict: "company_id,kind" });
     for(const m of (data.cashMovements || [])) await supabase.from("cash_movements").insert({ company_id: state.activeCompany.id, data: m.data, cassa: m.cassa, tipo: m.tipo, importo: m.importo, descrizione: m.descrizione || "" });
+
     const supplierIdMap = {};
     for(const s of (data.suppliers || [])){
       const res = await supabase.from("suppliers").insert({ company_id: state.activeCompany.id, nome: s.nome, aliases: s.aliases || [], sospeso_iniziale: n(s.sospeso_iniziale || s.sospesoIniziale || 0) }).select("id,nome").single();
@@ -380,6 +418,7 @@ async function importBackup(file){
       const sid = sm.supplier_id || supplierIdMap[sm.supplier_nome] || supplierIdMap[sm.nome];
       if(sid) await supabase.from("supplier_movements").insert({ company_id: state.activeCompany.id, supplier_id: sid, data: sm.data, tipo: sm.tipo, importo: sm.importo, nota: sm.nota || "" });
     }
+
     const employeeIdMap = {};
     for(const e of (data.employees || [])){
       const res = await supabase.from("employees").insert({ company_id: state.activeCompany.id, nome: e.nome, ruolo: e.ruolo || "", dovuto_mensile: n(e.dovuto_mensile || e.dovutoMensile || 0) }).select("id,nome").single();
@@ -416,7 +455,6 @@ async function seedDemoCloud(){
   await supabase.from("bookings").insert([{ company_id: state.activeCompany.id, data:"2026-03-20", nome:"Compleanno Cristian", adulti:40, bambini:3, tipo:"banchetto", importo:900, ora:"20:30", note:"40+3" }, { company_id: state.activeCompany.id, data:"2026-03-22", nome:"Dragon", adulti:45, bambini:0, tipo:"giro_pizza", importo:720, ora:"21:00", note:"GP" }]);
   await refreshData("Dati demo cloud caricati.");
 }
-
 function renderDashboard(){
   const last = [...state.dailyRecords].sort((a,b)=>b.data.localeCompare(a.data))[0];
   const totals = last ? getDailyTotals(last) : { totalIncasso:0, totalCoperti:0 };
@@ -430,11 +468,34 @@ function renderDashboard(){
   $("cashPos").textContent = euro(balances.pos);
   $("cashAllianz").textContent = euro(balances.allianz);
   $("cashPostepay").textContent = euro(balances.postepay);
-  $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">alert</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
+  $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item alert-row" data-alert-date="${a.title}" style="cursor:pointer;"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">vedi</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
+  document.querySelectorAll(".alert-row").forEach(row => row.addEventListener("click", () => openAlertModalByDate(row.dataset.alertDate)));
   $("dashboardFornitori").innerHTML = state.suppliers.slice(-5).reverse().map(s=>`<div class="item"><div><strong>${s.nome}</strong><small>${(s.aliases || []).join(", ") || "nessun alias"}</small></div><div>${euro(supplierSuspeso(s))}</div></div>`).join("") || `<div class="muted tiny">Nessun fornitore registrato.</div>`;
   $("dashboardBanchetti").innerHTML = state.bookings.slice(-5).reverse().map(b=>`<div class="item"><div><strong>${b.nome}</strong><small>${b.data} · ${b.tipo}</small></div><div>${b.adulti}+${b.bambini}</div></div>`).join("") || `<div class="muted tiny">Nessuna prenotazione registrata.</div>`;
 }
-function renderDailyTable(){ $("giorniTable").innerHTML = state.dailyRecords.map(r=>{ const totals = getDailyTotals(r); const alerts = validateDaily(r); return `<tr><td>${r.data}</td><td>${totals.totalCoperti}</td><td>${euro(totals.totalIncasso)}</td><td>${r.pizze}</td><td>${r.menu} / ${r.supplementi}</td><td>${alerts.length ? '<span class="bad">Alert</span>' : '<span class="ok">OK</span>'}</td></tr>`; }).join(""); }
+function renderDailyTable(){
+  $("giorniTable").innerHTML = state.dailyRecords.map(r=>{
+    const totals = getDailyTotals(r);
+    const alerts = validateDaily(r);
+    return `<tr>
+      <td><button class="btn ghost day-edit-btn" data-day-date="${r.data}" style="padding:6px 10px;">${r.data}</button></td>
+      <td>${totals.totalCoperti}</td>
+      <td>${euro(totals.totalIncasso)}</td>
+      <td>${r.pizze}</td>
+      <td>${r.menu} / ${r.supplementi}</td>
+      <td>${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}" style="padding:6px 10px;color:#fca5a5;">Alert</button>` : '<span class="ok">OK</span>'}</td>
+    </tr>`;
+  }).join("");
+  document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", () => openAlertModalByDate(btn.dataset.alertDate)));
+  document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", () => {
+    const rec = state.dailyRecords.find(r => r.data === btn.dataset.dayDate);
+    if(!rec) return;
+    fillDailyForm(rec);
+    navigate("giornaliera");
+    $("giornalieraFeedback").innerHTML = `<div class="alert okline">Hai caricato la giornata ${rec.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+}
 function renderCash(){ $("cashInitContanti").value = state.cashInitial.contanti || 0; $("cashInitPos").value = state.cashInitial.pos || 0; $("cashInitAllianz").value = state.cashInitial.allianz || 0; $("cashInitPostepay").value = state.cashInitial.postepay || 0; $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join(""); }
 function renderSuppliers(){ $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join(""); $("fornitoriTable").innerHTML = state.suppliers.map(s=>{ const sosp = supplierSuspeso(s); const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0]; return `<tr><td>${s.nome}</td><td>${(s.aliases || []).join(", ") || "—"}</td><td>${euro(sosp)}</td><td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td><td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td></tr>`; }).join(""); }
 function renderEmployees(){ $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join(""); $("dipendentiTable").innerHTML = state.employees.map(e=>{ const pagato = employeePaid(e); const residuo = n(e.dovuto_mensile) - pagato; return `<tr><td>${e.nome}</td><td>${e.ruolo || "—"}</td><td>${euro(e.dovuto_mensile)}</td><td>${euro(pagato)}</td><td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td></tr>`; }).join(""); }
@@ -446,7 +507,7 @@ function bindEvents(){
   document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
   document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
   $("loginBtn").addEventListener("click", login);
-  $("registerBtn").addEventListener("click", registerCompany);
+  $("registerBtn").addEventListener("click", register);
   $("logoutBtn").addEventListener("click", logout);
   $("selectorLogoutBtn").addEventListener("click", logout);
   $("enterCompanyBtn").addEventListener("click", async () => { if(!selectedCompanyId){ alert("Seleziona una ditta."); return; } await openCompany(selectedCompanyId); });
@@ -464,6 +525,10 @@ function bindEvents(){
   $("seedDemoBtn").addEventListener("click", seedDemoCloud);
   $("backupBtn").addEventListener("click", exportBackup);
   $("importFile").addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
+  const closeAlertModalBtn = $("closeAlertModalBtn");
+  if(closeAlertModalBtn) closeAlertModalBtn.addEventListener("click", closeAlertModal);
+  const editAlertDayBtn = $("editAlertDayBtn");
+  if(editAlertDayBtn) editAlertDayBtn.addEventListener("click", editSelectedAlertDay);
 }
 async function main(){
   bindEvents();
