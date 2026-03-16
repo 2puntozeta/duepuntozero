@@ -26,6 +26,7 @@ let pendingDailyRecord = null;
 let editingSupplierId = null;
 let editingEmployeeId = null;
 let editingBookingId = null;
+let editingCashMovementId = null;
 
 const $ = (id) => document.getElementById(id);
 const safeEl = (id) => document.getElementById(id);
@@ -299,6 +300,7 @@ async function openCompany(companyId) {
   hideAllViews();
   safeEl("appView")?.classList.remove("hidden");
   seedFields();
+  resetCashMovementForm();
   await refreshData();
 }
 
@@ -371,6 +373,41 @@ async function deleteCustomCash(name) {
   if (error) return showGlobalMessage(error.message, "error");
   await refreshData("Cassa personalizzata cancellata.");
 }
+
+function startCashMovementEdit(movement) {
+  editingCashMovementId = movement.id;
+  if (safeEl("movData")) $("movData").value = movement.data || "";
+  if (safeEl("movCassa")) $("movCassa").value = movement.cassa || "contanti";
+  if (safeEl("movTipo")) $("movTipo").value = movement.tipo || "entrata";
+  if (safeEl("movImporto")) $("movImporto").value = movement.importo ?? 0;
+  if (safeEl("movDescrizione")) $("movDescrizione").value = movement.descrizione || "";
+  if (safeEl("saveMovBtn")) $("saveMovBtn").textContent = "Aggiorna movimento";
+  navigate("casse");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function resetCashMovementForm() {
+  editingCashMovementId = null;
+  if (safeEl("movData")) $("movData").value = todayStr();
+  if (safeEl("movCassa")) $("movCassa").value = "contanti";
+  if (safeEl("movTipo")) $("movTipo").value = "entrata";
+  if (safeEl("movImporto")) $("movImporto").value = 0;
+  if (safeEl("movDescrizione")) $("movDescrizione").value = "";
+  if (safeEl("saveMovBtn")) $("saveMovBtn").textContent = "Aggiungi movimento";
+}
+async function deleteCashMovementById(id) {
+  const movement = state.cashMovements.find(m => m.id === id);
+  if (!movement) return;
+  if (!confirm(`Vuoi davvero eliminare questo movimento di cassa del ${movement.data}?`)) return;
+  const { error } = await supabase
+    .from("cash_movements")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("id", id);
+  if (error) return showGlobalMessage(error.message, "error");
+  resetCashMovementForm();
+  await refreshData("Movimento di cassa eliminato.");
+}
+
 async function saveCashMovement() {
   const payload = {
     company_id: state.activeCompany.id,
@@ -381,9 +418,15 @@ async function saveCashMovement() {
     descrizione: $("movDescrizione").value.trim(),
   };
   if (!payload.data || !payload.descrizione || payload.importo <= 0) return showGlobalMessage("Compila data, descrizione e importo.", "error");
-  const { error } = await supabase.from("cash_movements").insert(payload);
-  if (error) return showGlobalMessage(error.message, "error");
-  await refreshData("Movimento di cassa salvato.");
+
+  const result = editingCashMovementId
+    ? await supabase.from("cash_movements").update(payload).eq("company_id", state.activeCompany.id).eq("id", editingCashMovementId)
+    : await supabase.from("cash_movements").insert(payload);
+
+  if (result.error) return showGlobalMessage(result.error.message, "error");
+  const wasEditing = !!editingCashMovementId;
+  resetCashMovementForm();
+  await refreshData(wasEditing ? "Movimento di cassa aggiornato." : "Movimento di cassa salvato.");
 }
 
 async function persistDailyRecord(rec) {
@@ -735,7 +778,24 @@ function renderCash() {
     $("customCashTable").innerHTML = (state.customCashes || []).map(c => `<tr><td>${c.name}</td><td>${euro(c.amount)}</td><td><button class="btn ghost custom-cash-delete-btn" data-cash-name="${c.name}">Elimina</button></td></tr>`).join("") || '<tr><td colspan="3">Nessuna cassa personalizzata</td></tr>';
     document.querySelectorAll(".custom-cash-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteCustomCash(btn.dataset.cashName)));
   }
-  if (safeEl("movimentiTable")) $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join("");
+  if (safeEl("movimentiTable")) {
+    $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr>
+      <td>${m.data}</td>
+      <td>${m.cassa}</td>
+      <td>${m.tipo}</td>
+      <td>${m.descrizione || ""}</td>
+      <td>${euro(m.importo)}</td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn ghost cash-edit-btn" data-cash-id="${m.id}">Modifica</button>
+        <button class="btn ghost cash-delete-btn" data-cash-id="${m.id}">Elimina</button>
+      </td>
+    </tr>`).join("");
+    document.querySelectorAll(".cash-edit-btn").forEach(btn => btn.addEventListener("click", ()=>{
+      const movement = state.cashMovements.find(m => m.id === btn.dataset.cashId);
+      if (movement) startCashMovementEdit(movement);
+    }));
+    document.querySelectorAll(".cash-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteCashMovementById(btn.dataset.cashId)));
+  }
 }
 function renderSuppliers() {
   if (safeEl("fornMovNome")) $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join("");
