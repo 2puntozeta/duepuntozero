@@ -1,12 +1,9 @@
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-const invalidConfig =
-  !SUPABASE_URL ||
-  !SUPABASE_ANON_KEY ||
-  SUPABASE_URL.includes("https://qhgnyldwpjitiigxvzed.supabase.co") ||
-  SUPABASE_ANON_KEY.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek");
+const SUPABASE_URL = "https://qhgnyldwpjitiigxvzed.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek";
+const invalidConfig = false;
 
 const state = {
   session: null,
@@ -31,6 +28,26 @@ const euro = (v) => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EU
 const n = (v) => Number(v || 0);
 const todayStr = () => new Date().toISOString().slice(0,10);
 const isSupervisor = () => state.profile?.global_role === "supervisor";
+
+function showFatalError(message){
+  const boot = document.getElementById("bootScreen");
+  if(boot){
+    boot.classList.remove("hidden");
+    const card = boot.querySelector(".login-card");
+    if(card){
+      card.innerHTML = `
+        <div class="brand" style="margin-bottom:18px;">
+          <div class="logo">G2</div>
+          <div><h1>Gestionale Privato 2.0</h1><p>Errore di avvio</p></div>
+        </div>
+        <h1>Errore di caricamento</h1>
+        <p style="white-space:pre-wrap">${String(message)}</p>
+      `;
+    }
+  }
+}
+window.addEventListener("error", (e) => showFatalError(e.message || "Errore JavaScript"));
+window.addEventListener("unhandledrejection", (e) => showFatalError(e.reason?.message || e.reason || "Promise rifiutata"));
 
 function showGlobalMessage(message, type="ok"){
   $("globalFeedback").innerHTML = `<div class="alert ${type === "ok" ? "okline" : ""}">${message}</div>`;
@@ -183,7 +200,6 @@ function computeGlobalAlerts(){
 }
 
 async function initSupabase(){
-  if(invalidConfig){ hideAllViews(); $("bootScreen").classList.remove("hidden"); return false; }
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const { data: { session } } = await supabase.auth.getSession();
   state.session = session;
@@ -323,8 +339,14 @@ async function saveCashMovement(){
   if(error){ showGlobalMessage(error.message, "error"); return; }
   await refreshData("Movimento di cassa salvato.");
 }
-async function saveDaily(){
-  const rec = {
+async function persistDailyRecord(rec){
+  const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
+  if(error){ showGlobalMessage(error.message, "error"); return false; }
+  return true;
+}
+
+function collectDailyFromForm(){
+  return {
     data: $("gData").value,
     pizze: n($("gPizze").value),
     copertiRistorante: n($("gCopertiRistorante").value),
@@ -337,11 +359,36 @@ async function saveDaily(){
     cena: { coperti: n($("cenaCoperti").value), asporto: n($("cenaAsporto").value), contanti: n($("cenaContanti").value), pos: n($("cenaPos").value) },
     banchetti: { coperti: n($("banchettiCoperti").value), asporto: n($("banchettiAsporto").value), contanti: n($("banchettiContanti").value), pos: n($("banchettiPos").value) }
   };
+}
+function openConfirmSaveModal(rec, alerts){
+  pendingDailyRecord = rec;
+  $("confirmSaveDate").textContent = `Giornata: ${rec.data}`;
+  $("confirmSaveAlerts").innerHTML = alerts.map(a => `<div class="item"><div><strong>Alert</strong><small>${a}</small></div></div>`).join("");
+  $("confirmSaveModal").classList.remove("hidden");
+}
+function closeConfirmSaveModal(){
+  $("confirmSaveModal").classList.add("hidden");
+}
+async function forceSavePendingDay(){
+  if(!pendingDailyRecord) return;
+  const ok = await persistDailyRecord(pendingDailyRecord);
+  if(!ok) return;
+  $("giornalieraFeedback").innerHTML = `<div class="alert">Scheda salvata con alert confermati. Controlla i dati quando puoi.</div>`;
+  closeConfirmSaveModal();
+  await refreshData("Scheda giornaliera salvata.");
+  pendingDailyRecord = null;
+}
+async function saveDaily(){
+  const rec = collectDailyFromForm();
   if(!rec.data){ showGlobalMessage("Inserisci la data.", "error"); return; }
-  const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
-  if(error){ showGlobalMessage(error.message, "error"); return; }
   const alerts = validateDaily(rec);
-  $("giornalieraFeedback").innerHTML = alerts.length ? `<div class="alert">${alerts.map(a => `• ${a}`).join("<br>")}</div>` : `<div class="alert okline">Giornata salvata correttamente. Nessun alert bloccante nella V1.</div>`;
+  if(alerts.length){
+    openConfirmSaveModal(rec, alerts);
+    return;
+  }
+  const ok = await persistDailyRecord(rec);
+  if(!ok) return;
+  $("giornalieraFeedback").innerHTML = `<div class="alert okline">Giornata salvata correttamente. Nessun alert bloccante nella V1.</div>`;
   await refreshData("Scheda giornaliera salvata.");
 }
 async function saveSupplier(){
@@ -455,6 +502,62 @@ async function seedDemoCloud(){
   await supabase.from("bookings").insert([{ company_id: state.activeCompany.id, data:"2026-03-20", nome:"Compleanno Cristian", adulti:40, bambini:3, tipo:"banchetto", importo:900, ora:"20:30", note:"40+3" }, { company_id: state.activeCompany.id, data:"2026-03-22", nome:"Dragon", adulti:45, bambini:0, tipo:"giro_pizza", importo:720, ora:"21:00", note:"GP" }]);
   await refreshData("Dati demo cloud caricati.");
 }
+
+async function deleteDailyByDate(dateStr){
+  if(!confirm(`Vuoi davvero cancellare la giornata ${dateStr}?`)) return;
+  const { error } = await supabase.from("daily_records").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr);
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  await refreshData("Giornata cancellata.");
+}
+function loadDailyByDate(dateStr){
+  const rec = state.dailyRecords.find(r => r.data === dateStr);
+  if(!rec) return;
+  fillDailyForm(rec);
+  navigate("giornaliera");
+  $("giornalieraFeedback").innerHTML = `<div class="alert okline">Hai caricato la giornata ${rec.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function fillBookingForm(b){
+  $("banData").value = b.data || "";
+  $("banNome").value = b.nome || "";
+  $("banAdulti").value = b.adulti ?? 0;
+  $("banBambini").value = b.bambini ?? 0;
+  $("banTipo").value = b.tipo || "banchetto";
+  $("banImporto").value = b.importo ?? 0;
+  $("banOra").value = b.ora || "";
+  $("banNote").value = b.note || "";
+}
+async function saveBooking(){
+  const existingId = $("saveBanBtn").dataset.editId || "";
+  const payload = { company_id: state.activeCompany.id, data: $("banData").value, nome: $("banNome").value.trim(), adulti: n($("banAdulti").value), bambini: n($("banBambini").value), tipo: $("banTipo").value, importo: n($("banImporto").value), ora: $("banOra").value.trim(), note: $("banNote").value.trim() };
+  if(!payload.data || !payload.nome){ showGlobalMessage("Inserisci data e nome evento.", "error"); return; }
+  const query = existingId
+    ? supabase.from("bookings").update(payload).eq("id", existingId).eq("company_id", state.activeCompany.id)
+    : supabase.from("bookings").insert(payload);
+  const { error } = await query;
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  $("saveBanBtn").dataset.editId = "";
+  $("saveBanBtn").textContent = "Salva prenotazione";
+  await refreshData(existingId ? "Prenotazione aggiornata." : "Prenotazione salvata.");
+}
+function editBookingById(id){
+  const b = state.bookings.find(x => x.id === id);
+  if(!b) return;
+  fillBookingForm(b);
+  $("saveBanBtn").dataset.editId = id;
+  $("saveBanBtn").textContent = "Aggiorna prenotazione";
+  navigate("banchetti");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+async function deleteBookingById(id){
+  const b = state.bookings.find(x => x.id === id);
+  if(!b) return;
+  if(!confirm(`Vuoi davvero cancellare la prenotazione "${b.nome}" del ${b.data}?`)) return;
+  const { error } = await supabase.from("bookings").delete().eq("id", id).eq("company_id", state.activeCompany.id);
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  await refreshData("Prenotazione cancellata.");
+}
+
 function renderDashboard(){
   const last = [...state.dailyRecords].sort((a,b)=>b.data.localeCompare(a.data))[0];
   const totals = last ? getDailyTotals(last) : { totalIncasso:0, totalCoperti:0 };
@@ -483,60 +586,99 @@ function renderDailyTable(){
       <td>${euro(totals.totalIncasso)}</td>
       <td>${r.pizze}</td>
       <td>${r.menu} / ${r.supplementi}</td>
-      <td>${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}" style="padding:6px 10px;color:#fca5a5;">Alert</button>` : '<span class="ok">OK</span>'}</td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}" style="padding:6px 10px;color:#fca5a5;">Alert</button>` : '<span class="ok">OK</span>'}
+        <button class="btn ghost day-delete-btn" data-day-date="${r.data}" style="padding:6px 10px;">Cancella</button>
+      </td>
     </tr>`;
   }).join("");
   document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", () => openAlertModalByDate(btn.dataset.alertDate)));
-  document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", () => {
-    const rec = state.dailyRecords.find(r => r.data === btn.dataset.dayDate);
-    if(!rec) return;
-    fillDailyForm(rec);
-    navigate("giornaliera");
-    $("giornalieraFeedback").innerHTML = `<div class="alert okline">Hai caricato la giornata ${rec.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }));
+  document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", () => loadDailyByDate(btn.dataset.dayDate)));
+  document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteDailyByDate(btn.dataset.dayDate)));
 }
 function renderCash(){ $("cashInitContanti").value = state.cashInitial.contanti || 0; $("cashInitPos").value = state.cashInitial.pos || 0; $("cashInitAllianz").value = state.cashInitial.allianz || 0; $("cashInitPostepay").value = state.cashInitial.postepay || 0; $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join(""); }
 function renderSuppliers(){ $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join(""); $("fornitoriTable").innerHTML = state.suppliers.map(s=>{ const sosp = supplierSuspeso(s); const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0]; return `<tr><td>${s.nome}</td><td>${(s.aliases || []).join(", ") || "—"}</td><td>${euro(sosp)}</td><td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td><td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td></tr>`; }).join(""); }
 function renderEmployees(){ $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join(""); $("dipendentiTable").innerHTML = state.employees.map(e=>{ const pagato = employeePaid(e); const residuo = n(e.dovuto_mensile) - pagato; return `<tr><td>${e.nome}</td><td>${e.ruolo || "—"}</td><td>${euro(e.dovuto_mensile)}</td><td>${euro(pagato)}</td><td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td></tr>`; }).join(""); }
-function renderBookings(){ $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr><td>${b.data}</td><td>${b.nome}</td><td>${b.adulti}+${b.bambini}</td><td>${b.tipo}</td><td>${euro(b.importo)}</td><td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td></tr>`).join(""); }
-function runMonthlyReport(){ const month = String($("reportMonth").value).padStart(2,"0"); const year = String($("reportYear").value); const records = state.dailyRecords.filter(r => r.data.startsWith(`${year}-${month}`)); let copPranzo=0, copCena=0, copBanchetti=0, incasso=0, asporto=0, bancone=0, pizze=0; records.forEach(r=>{ copPranzo += n(r.pranzo.coperti); copCena += n(r.cena.coperti); copBanchetti += n(r.banchetti.coperti); incasso += getDailyTotals(r).totalIncasso; asporto += n(r.pranzo.asporto)+n(r.cena.asporto)+n(r.banchetti.asporto); bancone += n(r.bancone); pizze += n(r.pizze); }); $("rCopPranzo").textContent = copPranzo; $("rCopCena").textContent = copCena; $("rCopBanchetti").textContent = copBanchetti; $("rIncasso").textContent = euro(incasso); $("reportSummary").innerHTML = [`<div class="item"><div><strong>Totale coperti complessivi</strong><small>pranzo + cena + banchetti</small></div><div>${copPranzo + copCena + copBanchetti}</div></div>`,`<div class="item"><div><strong>Asporto totale</strong><small>somma delle tre colonne</small></div><div>${euro(asporto)}</div></div>`,`<div class="item"><div><strong>Bancone totale</strong><small>incasso registrato a bancone</small></div><div>${euro(bancone)}</div></div>`,`<div class="item"><div><strong>Pizze totali</strong><small>somma delle giornate del mese</small></div><div>${pizze}</div></div>`,`<div class="item"><div><strong>Giornate presenti</strong><small>schede giornaliere salvate nel mese</small></div><div>${records.length}</div></div>`].join(""); }
-function renderAll(){ renderDashboard(); renderDailyTable(); renderCash(); renderSuppliers(); renderEmployees(); renderBookings(); runMonthlyReport(); }
+function renderBookings(){
+  $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr>
+    <td>${b.data}</td>
+    <td>${b.nome}</td>
+    <td>${b.adulti}+${b.bambini}</td>
+    <td>${b.tipo}</td>
+    <td>${euro(b.importo)}</td>
+    <td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td>
+    <td style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn ghost booking-edit-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Modifica</button>
+      <button class="btn ghost booking-delete-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Cancella</button>
+    </td>
+  </tr>`).join("");
+  document.querySelectorAll(".booking-edit-btn").forEach(btn => btn.addEventListener("click", () => editBookingById(btn.dataset.bookingId)));
+  document.querySelectorAll(".booking-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteBookingById(btn.dataset.bookingId)));
+}
 
 function bindEvents(){
   document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
   document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
-  $("loginBtn").addEventListener("click", login);
-  $("registerBtn").addEventListener("click", register);
-  $("logoutBtn").addEventListener("click", logout);
-  $("selectorLogoutBtn").addEventListener("click", logout);
-  $("enterCompanyBtn").addEventListener("click", async () => { if(!selectedCompanyId){ alert("Seleziona una ditta."); return; } await openCompany(selectedCompanyId); });
-  $("switchCompanyBtn").addEventListener("click", async () => { if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
-  $("saveDayBtn").addEventListener("click", saveDaily);
-  $("saveCashInitBtn").addEventListener("click", saveCashInitial);
-  $("saveMovBtn").addEventListener("click", saveCashMovement);
-  $("saveFornBtn").addEventListener("click", saveSupplier);
-  $("saveFornMovBtn").addEventListener("click", saveSupplierMovement);
-  $("saveDipBtn").addEventListener("click", saveEmployee);
-  $("saveDipMovBtn").addEventListener("click", saveEmployeeMovement);
-  $("saveBanBtn").addEventListener("click", saveBooking);
-  $("runReportBtn").addEventListener("click", runMonthlyReport);
-  $("refreshBtn").addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
-  $("seedDemoBtn").addEventListener("click", seedDemoCloud);
-  $("backupBtn").addEventListener("click", exportBackup);
-  $("importFile").addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
-  const closeAlertModalBtn = $("closeAlertModalBtn");
-  if(closeAlertModalBtn) closeAlertModalBtn.addEventListener("click", closeAlertModal);
-  const editAlertDayBtn = $("editAlertDayBtn");
-  if(editAlertDayBtn) editAlertDayBtn.addEventListener("click", editSelectedAlertDay);
+
+  const byId = (id) => document.getElementById(id);
+
+  byId("loginBtn")?.addEventListener("click", login);
+  byId("registerBtn")?.addEventListener("click", registerCompany);
+  byId("logoutBtn")?.addEventListener("click", logout);
+  byId("selectorLogoutBtn")?.addEventListener("click", logout);
+
+  byId("enterCompanyBtn")?.addEventListener("click", async () => {
+    if(!selectedCompanyId){ alert("Seleziona una ditta."); return; }
+    await openCompany(selectedCompanyId);
+  });
+
+  byId("switchCompanyBtn")?.addEventListener("click", () => {
+    if(isSupervisor() || state.memberships.length > 1) renderCompanySelector();
+  });
+
+  byId("saveDayBtn")?.addEventListener("click", saveDaily);
+  byId("saveCashInitBtn")?.addEventListener("click", saveCashInitial);
+  byId("saveMovBtn")?.addEventListener("click", saveCashMovement);
+  byId("saveFornBtn")?.addEventListener("click", saveSupplier);
+  byId("saveFornMovBtn")?.addEventListener("click", saveSupplierMovement);
+  byId("saveDipBtn")?.addEventListener("click", saveEmployee);
+  byId("saveDipMovBtn")?.addEventListener("click", saveEmployeeMovement);
+  byId("saveBanBtn")?.addEventListener("click", saveBooking);
+  byId("runReportBtn")?.addEventListener("click", runMonthlyReport);
+
+  byId("refreshBtn")?.addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
+  byId("backupBtn")?.addEventListener("click", exportBackup);
+  byId("importFile")?.addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
+
+  byId("closeAlertModalBtn")?.addEventListener("click", closeAlertModal);
+  byId("editAlertDayBtn")?.addEventListener("click", editSelectedAlertDay);
+
+  byId("closeConfirmSaveModalBtn")?.addEventListener("click", closeConfirmSaveModal);
+  byId("reviewDayBtn")?.addEventListener("click", closeConfirmSaveModal);
+  byId("forceSaveDayBtn")?.addEventListener("click", forceSavePendingDay);
+
+  byId("cardFornitori")?.addEventListener("click", () => navigate("fornitori"));
+  byId("cardCoperti")?.addEventListener("click", () => navigate("giornaliera"));
+  byId("cardIncasso")?.addEventListener("click", () => navigate("giornaliera"));
+  byId("cardAlert")?.addEventListener("click", () => {
+    navigate("dashboard");
+    const first = document.querySelector(".alert-row");
+    if(first) first.scrollIntoView({behavior:"smooth", block:"center"});
+  });
 }
+
 async function main(){
-  bindEvents();
-  seedFields();
-  const ok = await initSupabase();
-  if(!ok) return;
-  supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
-  if(state.session) await bootstrapAfterAuth();
-  else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  try{
+    bindEvents();
+    seedFields();
+    const ok = await initSupabase();
+    if(!ok) return;
+    supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
+    if(state.session) await bootstrapAfterAuth();
+    else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  } catch (err){
+    console.error(err);
+    showFatalError(err?.message || err);
+  }
 }
 main();
