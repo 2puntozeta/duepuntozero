@@ -595,6 +595,58 @@ function renderBookings(){
   document.querySelectorAll(".booking-edit-btn").forEach(btn => btn.addEventListener("click", () => editBookingById(btn.dataset.bookingId)));
   document.querySelectorAll(".booking-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteBookingById(btn.dataset.bookingId)));
 }
+
+function bindEvents(){
+  document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
+  document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
+
+  const byId = (id) => document.getElementById(id);
+
+  byId("loginBtn")?.addEventListener("click", login);
+  byId("registerBtn")?.addEventListener("click", registerCompany);
+  byId("logoutBtn")?.addEventListener("click", logout);
+  byId("selectorLogoutBtn")?.addEventListener("click", logout);
+
+  byId("enterCompanyBtn")?.addEventListener("click", async () => {
+    if(!selectedCompanyId){ alert("Seleziona una ditta."); return; }
+    await openCompany(selectedCompanyId);
+  });
+
+  byId("switchCompanyBtn")?.addEventListener("click", () => {
+    if(isSupervisor() || state.memberships.length > 1) renderCompanySelector();
+  });
+
+  byId("saveDayBtn")?.addEventListener("click", saveDaily);
+  byId("saveCashInitBtn")?.addEventListener("click", saveCashInitial);
+  byId("saveMovBtn")?.addEventListener("click", saveCashMovement);
+  byId("saveFornBtn")?.addEventListener("click", saveSupplier);
+  byId("saveFornMovBtn")?.addEventListener("click", saveSupplierMovement);
+  byId("saveDipBtn")?.addEventListener("click", saveEmployee);
+  byId("saveDipMovBtn")?.addEventListener("click", saveEmployeeMovement);
+  byId("saveBanBtn")?.addEventListener("click", saveBooking);
+  byId("runReportBtn")?.addEventListener("click", runMonthlyReport);
+
+  byId("refreshBtn")?.addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
+  byId("backupBtn")?.addEventListener("click", exportBackup);
+  byId("importFile")?.addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
+
+  byId("closeAlertModalBtn")?.addEventListener("click", closeAlertModal);
+  byId("editAlertDayBtn")?.addEventListener("click", editSelectedAlertDay);
+
+  byId("closeConfirmSaveModalBtn")?.addEventListener("click", closeConfirmSaveModal);
+  byId("reviewDayBtn")?.addEventListener("click", closeConfirmSaveModal);
+  byId("forceSaveDayBtn")?.addEventListener("click", forceSavePendingDay);
+
+  byId("cardFornitori")?.addEventListener("click", () => navigate("fornitori"));
+  byId("cardCoperti")?.addEventListener("click", () => navigate("giornaliera"));
+  byId("cardIncasso")?.addEventListener("click", () => navigate("giornaliera"));
+  byId("cardAlert")?.addEventListener("click", () => {
+    navigate("dashboard");
+    const first = document.querySelector(".alert-row");
+    if(first) first.scrollIntoView({behavior:"smooth", block:"center"});
+  });
+}
+
 async function main(){
   bindEvents();
   seedFields();
