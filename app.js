@@ -554,6 +554,132 @@ function renderSuppliers(){
     btn.addEventListener("click", () => editSupplierByName(btn.dataset.supplierName));
   });
 }
+
+function renderEmployees(){
+  const select = safeEl("dipMovNome");
+  if (select) {
+    select.innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join("");
+  }
+
+  const table = safeEl("dipendentiTable");
+  if (!table) return;
+
+  table.innerHTML = state.employees.map(e=>{
+    const pagato = employeePaid(e);
+    const residuo = n(e.dovuto_mensile) - pagato;
+    return `<tr>
+      <td>${e.nome}</td>
+      <td>${e.ruolo || "—"}</td>
+      <td>${euro(e.dovuto_mensile)}</td>
+      <td>${euro(pagato)}</td>
+      <td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td>
+      <td><button class="btn ghost employee-edit-btn" data-employee-name="${e.nome}" style="padding:6px 10px;">Modifica</button></td>
+    </tr>`;
+  }).join("");
+
+  document.querySelectorAll(".employee-edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => editEmployeeByName(btn.dataset.employeeName));
+  });
+}
+
+function renderBookings(){
+  const table = safeEl("banchettiTable");
+  if (!table) return;
+
+  table.innerHTML = state.bookings.map(b=>`<tr>
+    <td>${b.data}</td>
+    <td>${b.nome}</td>
+    <td>${b.adulti}+${b.bambini}</td>
+    <td>${b.tipo}</td>
+    <td>${euro(b.importo)}</td>
+    <td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td>
+    <td style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn ghost booking-edit-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Modifica</button>
+      <button class="btn ghost booking-delete-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Cancella</button>
+    </td>
+  </tr>`).join("");
+
+  document.querySelectorAll(".booking-edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => editBookingById(btn.dataset.bookingId));
+  });
+  document.querySelectorAll(".booking-delete-btn").forEach(btn => {
+    btn.addEventListener("click", () => deleteBookingById(btn.dataset.bookingId));
+  });
+}
+
+function runMonthlyReport(){
+  const month = String($("reportMonth").value).padStart(2,"0");
+  const year = String($("reportYear").value);
+  const records = state.dailyRecords.filter(r => r.data.startsWith(`${year}-${month}`));
+  let copPranzo=0, copCena=0, copBanchetti=0, incasso=0, asporto=0, bancone=0, pizze=0;
+  records.forEach(r=>{
+    copPranzo += n(r.pranzo.coperti);
+    copCena += n(r.cena.coperti);
+    copBanchetti += n(r.banchetti.coperti);
+    incasso += getDailyTotals(r).totalIncasso;
+    asporto += n(r.pranzo.asporto)+n(r.cena.asporto)+n(r.banchetti.asporto);
+    bancone += n(r.bancone);
+    pizze += n(r.pizze);
+  });
+  if (safeEl("rCopPranzo")) $("rCopPranzo").textContent = copPranzo;
+  if (safeEl("rCopCena")) $("rCopCena").textContent = copCena;
+  if (safeEl("rCopBanchetti")) $("rCopBanchetti").textContent = copBanchetti;
+  if (safeEl("rIncasso")) $("rIncasso").textContent = euro(incasso);
+  if (safeEl("reportSummary")) $("reportSummary").innerHTML = [
+    `<div class="item"><div><strong>Totale coperti complessivi</strong><small>pranzo + cena + banchetti</small></div><div>${copPranzo + copCena + copBanchetti}</div></div>`,
+    `<div class="item"><div><strong>Asporto totale</strong><small>somma delle tre colonne</small></div><div>${euro(asporto)}</div></div>`,
+    `<div class="item"><div><strong>Bancone totale</strong><small>incasso registrato a bancone</small></div><div>${euro(bancone)}</div></div>`,
+    `<div class="item"><div><strong>Pizze totali</strong><small>somma delle giornate del mese</small></div><div>${pizze}</div></div>`,
+    `<div class="item"><div><strong>Giornate presenti</strong><small>schede giornaliere salvate nel mese</small></div><div>${records.length}</div></div>`
+  ].join("");
+}
+
+function renderAll(){
+  renderDashboard();
+  renderDailyTable();
+  renderCash();
+  renderSuppliers();
+  renderEmployees();
+  renderBookings();
+  runMonthlyReport();
+}
+
+function bindEvents(){
+  document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
+  document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
+  safeEl("loginBtn")?.addEventListener("click", login);
+  safeEl("registerBtn")?.addEventListener("click", register);
+  safeEl("logoutBtn")?.addEventListener("click", logout);
+  safeEl("selectorLogoutBtn")?.addEventListener("click", logout);
+  safeEl("enterCompanyBtn")?.addEventListener("click", async () => { if(!selectedCompanyId){ alert("Seleziona una ditta."); return; } await openCompany(selectedCompanyId); });
+  safeEl("switchCompanyBtn")?.addEventListener("click", async () => { if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
+  safeEl("saveDayBtn")?.addEventListener("click", saveDaily);
+  safeEl("saveCashInitBtn")?.addEventListener("click", saveCashInitial);
+  safeEl("saveNewCashBtn")?.addEventListener("click", saveNewCash);
+  safeEl("saveMovBtn")?.addEventListener("click", saveCashMovement);
+  safeEl("saveFornBtn")?.addEventListener("click", saveSupplier);
+  safeEl("saveFornMovBtn")?.addEventListener("click", saveSupplierMovement);
+  safeEl("saveDipBtn")?.addEventListener("click", saveEmployee);
+  safeEl("saveDipMovBtn")?.addEventListener("click", saveEmployeeMovement);
+  safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
+  safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
+  safeEl("refreshBtn")?.addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
+  safeEl("backupBtn")?.addEventListener("click", exportBackup);
+  safeEl("importFile")?.addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
+  safeEl("closeAlertModalBtn")?.addEventListener("click", closeAlertModal);
+  safeEl("editAlertDayBtn")?.addEventListener("click", editSelectedAlertDay);
+  safeEl("closeConfirmSaveModalBtn")?.addEventListener("click", closeConfirmSaveModal);
+  safeEl("reviewDayBtn")?.addEventListener("click", closeConfirmSaveModal);
+  safeEl("forceSaveDayBtn")?.addEventListener("click", forceSavePendingDay);
+  safeEl("cardFornitori")?.addEventListener("click", () => navigate("fornitori"));
+  safeEl("cardCoperti")?.addEventListener("click", () => navigate("giornaliera"));
+  safeEl("cardIncasso")?.addEventListener("click", () => navigate("giornaliera"));
+  safeEl("cardAlert")?.addEventListener("click", () => {
+    navigate("dashboard");
+    const first = document.querySelector(".alert-row");
+    if(first) first.scrollIntoView({ behavior:"smooth", block:"center" });
+  });
+}
 async function main(){
   try{
     bindEvents();
