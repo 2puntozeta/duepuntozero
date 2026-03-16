@@ -9,8 +9,9 @@ const state = {
   memberships: [],
   activeCompany: null,
   dailyRecords: [],
-  cashInitial: { contanti: 0, pos: 0, allianz: 0, postepay: 0 },
+  cashInitial: { contanti: 0, pos: 0 },
   cashMovements: [],
+  customCashes: [],
   suppliers: [],
   supplierMovements: [],
   employees: [],
@@ -258,7 +259,8 @@ async function loadCompanyData(){
   state.employees = employees;
   state.employeeMovements = employee_movements;
   state.bookings = bookings;
-  state.cashInitial = { contanti: 0, pos: 0, allianz: 0, postepay: 0 };
+  state.customCashes = custom_cash_state;
+  state.cashInitial = { contanti: 0, pos: 0 };
   cash_state.forEach(r => { state.cashInitial[r.kind] = n(r.amount); });
 }
 async function refreshData(message=null){
@@ -310,6 +312,7 @@ async function saveDaily(){
   const alerts = validateDaily(rec);
   $("giornalieraFeedback").innerHTML = alerts.length ? `<div class="alert">${alerts.map(a => `• ${a}`).join("<br>")}</div>` : `<div class="alert okline">Giornata salvata correttamente. Nessun alert bloccante nella V1.</div>`;
   await refreshData("Scheda giornaliera salvata.");
+  resetDailyForm();
 }
 async function saveSupplier(){
   const nome = $("fornNome").value.trim();
@@ -323,6 +326,9 @@ async function saveSupplier(){
   const result = existing ? await supabase.from("suppliers").update(payload).eq("id", existing.id) : await supabase.from("suppliers").insert(payload);
   if(result.error){ showGlobalMessage(result.error.message, "error"); return; }
   await refreshData("Fornitore salvato.");
+  $("fornNome").value = "";
+  $("fornAlias").value = "";
+  $("fornSospeso").value = 0;
 }
 async function saveSupplierMovement(){
   const supplier = state.suppliers.find(s => s.nome === $("fornMovNome").value);
@@ -342,6 +348,9 @@ async function saveEmployee(){
   const result = existing ? await supabase.from("employees").update(payload).eq("id", existing.id) : await supabase.from("employees").insert(payload);
   if(result.error){ showGlobalMessage(result.error.message, "error"); return; }
   await refreshData("Dipendente salvato.");
+  $("dipNome").value = "";
+  $("dipRuolo").value = "";
+  $("dipDovuto").value = 0;
 }
 async function saveEmployeeMovement(){
   const employee = state.employees.find(e => e.nome === $("dipMovNome").value);

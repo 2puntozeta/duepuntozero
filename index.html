@@ -49,7 +49,7 @@
 
       <div id="registerTab" class="auth-tab hidden">
         <div style="display:grid;gap:12px;">
-          <div><label>Nome ditta</label><input id="registerCompanyName" placeholder="es. Pizzeria Armogida" /></div>
+          <div><label>Nome ditta</label><input id="registerCompanyName" placeholder="es. Pizzeria" /></div>
           <div><label>Partita IVA (facoltativa)</label><input id="registerVatNumber" placeholder="facoltativa" /></div>
           <div><label>Telefono (facoltativo)</label><input id="registerPhone" placeholder="facoltativo" /></div>
           <div><label>Email</label><input id="registerEmail" type="email" placeholder="nome@email.com" /></div>
@@ -210,22 +210,36 @@
       </section>
 
       <section id="casse" class="section">
-        <div class="card">
-          <div class="toolbar"><h3 class="section-title" style="margin:0">Casse</h3><span class="tag">saldi iniziali + movimenti</span></div>
-          <div class="row-4">
-            <div><label>Contanti iniziale</label><input id="cashInitContanti" type="number" step="0.01" value="0" /></div>
-            <div><label>POS iniziale</label><input id="cashInitPos" type="number" step="0.01" value="0" /></div>
-            <div><label>Allianz iniziale</label><input id="cashInitAllianz" type="number" step="0.01" value="0" /></div>
-            <div><label>Postepay iniziale</label><input id="cashInitPostepay" type="number" step="0.01" value="0" /></div>
+        <div class="split">
+          <div class="card">
+            <div class="toolbar"><h3 class="section-title" style="margin:0">Casse</h3><span class="tag">saldi iniziali + movimenti</span></div>
+            <div class="row-2">
+              <div><label>Contanti iniziale</label><input id="cashInitContanti" type="number" step="0.01" value="0" /></div>
+              <div><label>POS iniziale</label><input id="cashInitPos" type="number" step="0.01" value="0" /></div>
+            </div>
+            <div class="toolbar" style="margin-top:14px;"><div class="muted tiny">I saldi vengono aggiornati anche dagli incassi della scheda giornaliera.</div><button id="saveCashInitBtn">Salva saldi iniziali</button></div>
           </div>
-          <div class="toolbar" style="margin-top:14px;"><div class="muted tiny">I saldi vengono aggiornati anche dagli incassi della scheda giornaliera.</div><button id="saveCashInitBtn">Salva saldi iniziali</button></div>
+
+          <div class="card">
+            <div class="toolbar"><h3 class="section-title" style="margin:0">Nuova cassa</h3><span class="tag">personalizzata</span></div>
+            <div class="row-2">
+              <div><label>Nome cassa</label><input id="newCashName" placeholder="es. Allianz / Postepay" /></div>
+              <div><label>Saldo iniziale</label><input id="newCashAmount" type="number" step="0.01" value="0" /></div>
+            </div>
+            <div class="toolbar" style="margin-top:14px;"><div class="muted tiny">Qui puoi aggiungere nuove casse personalizzate direttamente da questa pagina.</div><button id="saveNewCashBtn">Aggiungi cassa</button></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <h3 class="section-title">Casse personalizzate</h3>
+          <div style="overflow:auto;"><table><thead><tr><th>Nome cassa</th><th>Saldo iniziale</th><th>Azioni</th></tr></thead><tbody id="customCashTable"></tbody></table></div>
         </div>
 
         <div class="card" style="margin-top:16px;">
           <h3 class="section-title">Nuovo movimento di cassa</h3>
           <div class="row-4">
             <div><label>Data</label><input id="movData" type="date" /></div>
-            <div><label>Cassa</label><select id="movCassa"><option value="contanti">Contanti</option><option value="pos">POS</option><option value="allianz">Allianz</option><option value="postepay">Postepay</option></select></div>
+            <div><label>Cassa</label><select id="movCassa"><option value="contanti">Contanti</option><option value="pos">POS</option></select></div>
             <div><label>Tipo</label><select id="movTipo"><option value="entrata">Entrata</option><option value="uscita">Uscita</option></select></div>
             <div><label>Importo</label><input id="movImporto" type="number" step="0.01" value="0" /></div>
           </div>
@@ -270,7 +284,7 @@
 
         <div class="card" style="margin-top:16px;">
           <h3 class="section-title">Elenco fornitori</h3>
-          <div style="overflow:auto;"><table><thead><tr><th>Fornitore</th><th>Alias</th><th>Sospeso attuale</th><th>Ultimo movimento</th><th>Stato</th></tr></thead><tbody id="fornitoriTable"></tbody></table></div>
+          <div style="overflow:auto;"><table><thead><tr><th>Fornitore</th><th>Alias</th><th>Sospeso attuale</th><th>Ultimo movimento</th><th>Stato</th><th>Azioni</th></tr></thead><tbody id="fornitoriTable"></tbody></table></div>
         </div>
       </section>
 
@@ -279,7 +293,7 @@
           <div class="card">
             <h3 class="section-title">Nuovo dipendente</h3>
             <div class="row-3">
-              <div><label>Nome</label><input id="dipNome" placeholder="es. Tommaso" /></div>
+              <div><label>Nome</label><input id="dipNome" placeholder="es. Mario" /></div>
               <div><label>Ruolo</label><input id="dipRuolo" placeholder="es. Sala / Cucina" /></div>
               <div><label>Dovuto mensile</label><input id="dipDovuto" type="number" step="0.01" value="0" /></div>
             </div>
@@ -303,7 +317,7 @@
 
         <div class="card" style="margin-top:16px;">
           <h3 class="section-title">Elenco dipendenti</h3>
-          <div style="overflow:auto;"><table><thead><tr><th>Nome</th><th>Ruolo</th><th>Dovuto</th><th>Pagato</th><th>Residuo</th></tr></thead><tbody id="dipendentiTable"></tbody></table></div>
+          <div style="overflow:auto;"><table><thead><tr><th>Nome</th><th>Ruolo</th><th>Dovuto</th><th>Pagato</th><th>Residuo</th><th>Azioni</th></tr></thead><tbody id="dipendentiTable"></tbody></table></div>
         </div>
       </section>
 
