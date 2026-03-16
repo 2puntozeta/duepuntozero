@@ -106,6 +106,7 @@
       <button class="nav-btn" data-section="dipendenti">Dipendenti</button>
       <button class="nav-btn" data-section="banchetti">Prenotazioni / Banchetti</button>
       <button class="nav-btn" data-section="report">Report</button>
+      <button class="nav-btn hidden" id="navDitteBtn" data-section="ditte">Gestione ditte</button>
 
       <div class="spacer"></div>
       <button class="secondary" id="switchCompanyBtn">Cambia ditta</button>
@@ -393,7 +394,25 @@
         </div>
       </section>
 
-      <section id="report" class="section">
+      
+      <section id="ditte" class="section">
+        <div class="card">
+          <div class="toolbar">
+            <h3>Gestione ditte</h3>
+            <div class="muted small">Solo supervisor</div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Ditta</th><th>P.IVA</th><th>Stato</th><th>Creata</th><th>Azioni</th></tr>
+              </thead>
+              <tbody id="ditteTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+<section id="report" class="section">
         <div class="card">
           <h3>Report mensile</h3>
           <div class="grid3">

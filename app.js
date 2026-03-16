@@ -17,6 +17,7 @@ const state = {
   employees: [],
   employeeMovements: [],
   bookings: [],
+  companiesAdmin: [],
 };
 
 let supabase = null;
@@ -282,13 +283,26 @@ async function fetchProfileAndMemberships() {
   state.profile = profile;
 
   if (profile?.global_role === "supervisor") {
-    const { data: companies, error: cErr } = await supabase.from("companies").select("id,name,vat_number").order("created_at", { ascending: true });
+    const { data: companies, error: cErr } = await supabase
+      .from("companies")
+      .select("id,name,vat_number,status,created_at")
+      .order("created_at", { ascending: true });
     if (cErr) throw cErr;
-    state.memberships = (companies || []).map(c => ({ id: `supervisor-${c.id}`, role:"supervisor", company_id:c.id, companies:c }));
+    state.companiesAdmin = companies || [];
+    state.memberships = (companies || []).map(c => ({
+      id: `supervisor-${c.id}`,
+      role: "supervisor",
+      company_id: c.id,
+      companies: c
+    }));
     return;
   }
 
-  const { data: memberships, error: mErr } = await supabase.from("company_users").select("id, role, company_id, companies(id, name, vat_number)").order("created_at", { ascending: true });
+  const { data: memberships, error: mErr } = await supabase
+    .from("company_users")
+    .select("id, role, company_id, companies(id, name, vat_number, status, created_at)")
+    .order("created_at", { ascending: true });
+
   if (mErr) throw mErr;
   state.memberships = memberships || [];
 }
@@ -310,11 +324,29 @@ function renderCompanySelector() {
 }
 async function bootstrapAfterAuth() {
   await fetchProfileAndMemberships();
+
+  if (safeEl("navDitteBtn")) $("navDitteBtn").classList.toggle("hidden", !isSupervisor());
+
   if (state.memberships.length === 0) {
     hideAllViews();
     safeEl("authView")?.classList.remove("hidden");
     return showAuthMessage("Questo account non è collegato a nessuna ditta.", true);
   }
+
+  if (!isSupervisor() && state.memberships.length === 1) {
+    const onlyCompany = state.memberships[0]?.companies;
+    if (onlyCompany?.status === "pending") {
+      hideAllViews();
+      safeEl("authView")?.classList.remove("hidden");
+      return showAuthMessage("La tua ditta è in attesa di approvazione.", true);
+    }
+    if (onlyCompany?.status === "blocked") {
+      hideAllViews();
+      safeEl("authView")?.classList.remove("hidden");
+      return showAuthMessage("La tua ditta è stata bloccata.", true);
+    }
+  }
+
   if (isSupervisor() || state.memberships.length > 1) {
     selectedCompanyId = selectedCompanyId || state.memberships[0].company_id;
     renderCompanySelector();
@@ -326,14 +358,126 @@ async function bootstrapAfterAuth() {
 async function openCompany(companyId) {
   const membership = state.memberships.find(m => m.company_id === companyId);
   if (!membership) return;
-  state.activeCompany = { id: companyId, name: membership.companies.name, role: membership.role };
+
+  if (!isSupervisor()) {
+    const status = membership.companies?.status || "active";
+    if (status === "pending") return showGlobalMessage("Questa ditta è in attesa di approvazione.", "error");
+    if (status === "blocked") return showGlobalMessage("Questa ditta è bloccata.", "error");
+  }
+
+  state.activeCompany = {
+    id: companyId,
+    name: membership.companies.name,
+    role: membership.role,
+  };
+
   if (safeEl("activeCompanyName")) $("activeCompanyName").textContent = membership.companies.name;
   if (safeEl("activeCompanyRole")) $("activeCompanyRole").textContent = `Ruolo: ${membership.role}`;
+
   hideAllViews();
   safeEl("appView")?.classList.remove("hidden");
   seedFields();
   resetCashMovementForm();
   await refreshData();
+}
+
+
+async function refreshCompaniesAdmin() {
+  if (!isSupervisor()) return;
+  const { data, error } = await supabase
+    .from("companies")
+    .select("id,name,vat_number,status,created_at")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  state.companiesAdmin = data || [];
+  state.memberships = state.companiesAdmin.map(c => ({
+    id: `supervisor-${c.id}`,
+    role: "supervisor",
+    company_id: c.id,
+    companies: c
+  }));
+}
+
+async function setCompanyStatus(companyId, status) {
+  const patch = { status };
+  const { error } = await supabase
+    .from("companies")
+    .update(patch)
+    .eq("id", companyId);
+
+  if (error) return showGlobalMessage(error.message, "error");
+
+  await refreshCompaniesAdmin();
+  renderCompanySelector();
+  renderCompaniesAdmin();
+  showGlobalMessage(`Ditta aggiornata: ${status}`);
+}
+
+async function deleteCompanyAdmin(companyId) {
+  const company = state.companiesAdmin.find(c => c.id === companyId);
+  if (!company) return;
+  if (!confirm(`Vuoi davvero eliminare la ditta "${company.name}"?`)) return;
+
+  const tables = [
+    "daily_records",
+    "cash_state",
+    "custom_cash_state",
+    "cash_movements",
+    "supplier_movements",
+    "suppliers",
+    "employee_movements",
+    "employees",
+    "bookings",
+    "company_users"
+  ];
+
+  for (const table of tables) {
+    const { error } = await supabase.from(table).delete().eq("company_id", companyId);
+    if (error && table !== "company_users") {
+      return showGlobalMessage(`${table}: ${error.message}`, "error");
+    }
+  }
+
+  const { error: companyErr } = await supabase.from("companies").delete().eq("id", companyId);
+  if (companyErr) return showGlobalMessage(companyErr.message, "error");
+
+  await refreshCompaniesAdmin();
+  renderCompanySelector();
+  renderCompaniesAdmin();
+  showGlobalMessage("Ditta eliminata.");
+}
+
+function renderCompaniesAdmin() {
+  const table = safeEl("ditteTable");
+  if (!table) return;
+
+  if (!isSupervisor()) {
+    table.innerHTML = '<tr><td colspan="5">Sezione disponibile solo per supervisor.</td></tr>';
+    return;
+  }
+
+  const rows = state.companiesAdmin || [];
+  table.innerHTML = rows.map(c => {
+    const status = c.status || "active";
+    const statusLabel = status === "active" ? '<span class="ok">active</span>' : status === "blocked" ? '<span class="bad">blocked</span>' : '<span class="warn">pending</span>';
+    return `<tr>
+      <td>${c.name}</td>
+      <td>${c.vat_number || "—"}</td>
+      <td>${statusLabel}</td>
+      <td>${c.created_at ? new Date(c.created_at).toLocaleDateString("it-IT") : "—"}</td>
+      <td style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn ghost company-approve-btn" data-company-id="${c.id}">Autorizza</button>
+        <button class="btn ghost company-pending-btn" data-company-id="${c.id}">Rimetti in attesa</button>
+        <button class="btn ghost company-block-btn" data-company-id="${c.id}">Blocca</button>
+        <button class="btn ghost company-delete-btn" data-company-id="${c.id}">Elimina</button>
+      </td>
+    </tr>`;
+  }).join("");
+
+  document.querySelectorAll(".company-approve-btn").forEach(btn => btn.addEventListener("click", () => setCompanyStatus(btn.dataset.companyId, "active")));
+  document.querySelectorAll(".company-pending-btn").forEach(btn => btn.addEventListener("click", () => setCompanyStatus(btn.dataset.companyId, "pending")));
+  document.querySelectorAll(".company-block-btn").forEach(btn => btn.addEventListener("click", () => setCompanyStatus(btn.dataset.companyId, "blocked")));
+  document.querySelectorAll(".company-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteCompanyAdmin(btn.dataset.companyId)));
 }
 
 async function fetchCompanyTable(table, orderColumn="created_at", ascending=true) {
@@ -366,6 +510,7 @@ async function loadCompanyData() {
 }
 async function refreshData(message=null) {
   try {
+    if (isSupervisor()) await refreshCompaniesAdmin();
     await loadCompanyData();
     renderAll();
     if (message) showGlobalMessage(message);
@@ -920,12 +1065,14 @@ function runMonthlyReport() {
   ].join("");
 }
 function renderAll() {
+  if (safeEl("navDitteBtn")) $("navDitteBtn").classList.toggle("hidden", !isSupervisor());
   renderDashboard();
   renderDailyTable();
   renderCash();
   renderSuppliers();
   renderEmployees();
   renderBookings();
+  renderCompaniesAdmin();
   runMonthlyReport();
 }
 
