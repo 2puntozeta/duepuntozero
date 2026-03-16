@@ -5,8 +5,8 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 const invalidConfig =
   !SUPABASE_URL ||
   !SUPABASE_ANON_KEY ||
-  SUPABASE_URL.includes("https://qhgnyldwpjitiigxvzed.supabase.co") ||
-  SUPABASE_ANON_KEY.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek");
+  SUPABASE_URL.includes("INCOLLA_QUI") ||
+  SUPABASE_ANON_KEY.includes("INCOLLA_QUI");
 
 const state = {
   session: null,
