@@ -200,10 +200,25 @@ function computeGlobalAlerts(){
 }
 
 async function initSupabase(){
-  supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const { data: { session } } = await supabase.auth.getSession();
-  state.session = session;
-  return true;
+  try {
+    supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const { data: { session }, error } = await supabase.auth.getSession();
+    if (error) {
+      console.error("Errore getSession:", error);
+      hideAllViews();
+      $("authView").classList.remove("hidden");
+      showAuthMessage("Errore di connessione a Supabase: " + error.message, true);
+      return false;
+    }
+    state.session = session;
+    return true;
+  } catch (err) {
+    console.error("Errore initSupabase:", err);
+    hideAllViews();
+    $("authView").classList.remove("hidden");
+    showAuthMessage("Errore avvio app: " + (err?.message || err), true);
+    return false;
+  }
 }
 function setAuthTab(tab){
   document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.authTab === tab));
