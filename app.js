@@ -23,6 +23,7 @@ let supabase = null;
 let selectedCompanyId = null;
 
 const $ = (id) => document.getElementById(id);
+const safeEl = (id) => document.getElementById(id);
 const euro = (v) => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(Number(v || 0));
 const n = (v) => Number(v || 0);
 const todayStr = () => new Date().toISOString().slice(0,10);
