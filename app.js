@@ -88,6 +88,23 @@ function validateDaily(rec){
   if(totals.totalIncasso <= 0 && copertiTot > 0) alerts.push("Ci sono coperti ma l'incasso totale è zero.");
   return alerts;
 }
+
+async function saveNewCash(){
+  const name = safeEl("newCashName")?.value?.trim();
+  const amount = n(safeEl("newCashAmount")?.value);
+  if(!name){ showGlobalMessage("Inserisci il nome della cassa.", "error"); return; }
+  const { error } = await supabase.from("custom_cash_state").upsert({ company_id: state.activeCompany.id, name, amount }, { onConflict: "company_id,name" });
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  if (safeEl("newCashName")) $("newCashName").value = "";
+  if (safeEl("newCashAmount")) $("newCashAmount").value = 0;
+  await refreshData("Cassa personalizzata salvata.");
+}
+async function deleteCustomCash(name){
+  if(!confirm(`Vuoi davvero cancellare la cassa ${name}?`)) return;
+  const { error } = await supabase.from("custom_cash_state").delete().eq("company_id", state.activeCompany.id).eq("name", name);
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  await refreshData("Cassa personalizzata cancellata.");
+}
 function supplierSuspeso(s){
   const moves = state.supplierMovements.filter(m => m.supplier_id === s.id);
   const fatture = moves.filter(m=>m.tipo==="fattura").reduce((a,b)=>a+n(b.importo),0);
@@ -278,10 +295,8 @@ async function upsertCashState(kind, amount){
 async function saveCashInitial(){
   try{
     await Promise.all([
-      upsertCashState("contanti", n($("cashInitContanti").value)),
-      upsertCashState("pos", n($("cashInitPos").value)),
-      upsertCashState("allianz", n($("cashInitAllianz").value)),
-      upsertCashState("postepay", n($("cashInitPostepay").value))
+      upsertCashState("contanti", n(safeEl("cashInitContanti")?.value)),
+      upsertCashState("pos", n(safeEl("cashInitPos")?.value))
     ]);
     await refreshData("Saldi iniziali salvati.");
   }catch(err){ showGlobalMessage(err.message, "error"); }
@@ -437,20 +452,36 @@ function renderDashboard(){
   const totals = last ? getDailyTotals(last) : { totalIncasso:0, totalCoperti:0 };
   const alerts = computeGlobalAlerts();
   const balances = computeCashBalances();
-  $("kpiIncasso").textContent = euro(totals.totalIncasso);
-  $("kpiCoperti").textContent = totals.totalCoperti;
-  $("kpiFornitori").textContent = state.suppliers.filter(s => supplierSuspeso(s) > 0).length;
-  $("kpiAlert").textContent = alerts.length;
-  $("cashContanti").textContent = euro(balances.contanti);
-  $("cashPos").textContent = euro(balances.pos);
-  $("cashAllianz").textContent = euro(balances.allianz);
-  $("cashPostepay").textContent = euro(balances.postepay);
-  $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">alert</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
-  $("dashboardFornitori").innerHTML = state.suppliers.slice(-5).reverse().map(s=>`<div class="item"><div><strong>${s.nome}</strong><small>${(s.aliases || []).join(", ") || "nessun alias"}</small></div><div>${euro(supplierSuspeso(s))}</div></div>`).join("") || `<div class="muted tiny">Nessun fornitore registrato.</div>`;
-  $("dashboardBanchetti").innerHTML = state.bookings.slice(-5).reverse().map(b=>`<div class="item"><div><strong>${b.nome}</strong><small>${b.data} · ${b.tipo}</small></div><div>${b.adulti}+${b.bambini}</div></div>`).join("") || `<div class="muted tiny">Nessuna prenotazione registrata.</div>`;
+  if (safeEl("kpiIncasso")) $("kpiIncasso").textContent = euro(totals.totalIncasso);
+  if (safeEl("kpiCoperti")) $("kpiCoperti").textContent = totals.totalCoperti;
+  if (safeEl("kpiFornitori")) $("kpiFornitori").textContent = state.suppliers.filter(s => supplierSuspeso(s) > 0).length;
+  if (safeEl("kpiAlert")) $("kpiAlert").textContent = alerts.length;
+  if (safeEl("cashContanti")) $("cashContanti").textContent = euro(balances.contanti);
+  if (safeEl("cashPos")) $("cashPos").textContent = euro(balances.pos);
+  if (safeEl("alertsBox")) $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">alert</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
+  if (safeEl("dashboardFornitori")) $("dashboardFornitori").innerHTML = state.suppliers.slice(-5).reverse().map(s=>`<div class="item"><div><strong>${s.nome}</strong><small>${(s.aliases || []).join(", ") || "nessun alias"}</small></div><div>${euro(supplierSuspeso(s))}</div></div>`).join("") || `<div class="muted tiny">Nessun fornitore registrato.</div>`;
+  if (safeEl("dashboardBanchetti")) $("dashboardBanchetti").innerHTML = state.bookings.slice(-5).reverse().map(b=>`<div class="item"><div><strong>${b.nome}</strong><small>${b.data} · ${b.tipo}</small></div><div>${b.adulti}+${b.bambini}</div></div>`).join("") || `<div class="muted tiny">Nessuna prenotazione registrata.</div>`;
 }
 function renderDailyTable(){ $("giorniTable").innerHTML = state.dailyRecords.map(r=>{ const totals = getDailyTotals(r); const alerts = validateDaily(r); return `<tr><td>${r.data}</td><td>${totals.totalCoperti}</td><td>${euro(totals.totalIncasso)}</td><td>${r.pizze}</td><td>${r.menu} / ${r.supplementi}</td><td>${alerts.length ? '<span class="bad">Alert</span>' : '<span class="ok">OK</span>'}</td></tr>`; }).join(""); }
-function renderCash(){ $("cashInitContanti").value = state.cashInitial.contanti || 0; $("cashInitPos").value = state.cashInitial.pos || 0; $("cashInitAllianz").value = state.cashInitial.allianz || 0; $("cashInitPostepay").value = state.cashInitial.postepay || 0; $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join(""); }
+function renderCash(){
+  if (safeEl("cashInitContanti")) $("cashInitContanti").value = state.cashInitial.contanti || 0;
+  if (safeEl("cashInitPos")) $("cashInitPos").value = state.cashInitial.pos || 0;
+
+  const movSelect = safeEl("movCassa");
+  if (movSelect) {
+    const baseOptions = ['<option value="contanti">Contanti</option>', '<option value="pos">POS</option>'];
+    const customOptions = (state.customCashes || []).map(c => `<option value="${c.name}">${c.name}</option>`);
+    movSelect.innerHTML = [...baseOptions, ...customOptions].join("");
+  }
+
+  const customCashTable = safeEl("customCashTable");
+  if (customCashTable) {
+    customCashTable.innerHTML = (state.customCashes || []).map(c => `<tr><td>${c.name}</td><td>${euro(c.amount)}</td><td><button class="btn ghost custom-cash-delete-btn" data-cash-name="${c.name}" style="padding:6px 10px;">Cancella</button></td></tr>`).join("") || '<tr><td colspan="3">Nessuna cassa personalizzata</td></tr>';
+    document.querySelectorAll(".custom-cash-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteCustomCash(btn.dataset.cashName)));
+  }
+
+  if (safeEl("movimentiTable")) $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join("");
+}
 function renderSuppliers(){ $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join(""); $("fornitoriTable").innerHTML = state.suppliers.map(s=>{ const sosp = supplierSuspeso(s); const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0]; return `<tr><td>${s.nome}</td><td>${(s.aliases || []).join(", ") || "—"}</td><td>${euro(sosp)}</td><td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td><td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td></tr>`; }).join(""); }
 function renderEmployees(){ $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join(""); $("dipendentiTable").innerHTML = state.employees.map(e=>{ const pagato = employeePaid(e); const residuo = n(e.dovuto_mensile) - pagato; return `<tr><td>${e.nome}</td><td>${e.ruolo || "—"}</td><td>${euro(e.dovuto_mensile)}</td><td>${euro(pagato)}</td><td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td></tr>`; }).join(""); }
 function renderBookings(){ $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr><td>${b.data}</td><td>${b.nome}</td><td>${b.adulti}+${b.bambini}</td><td>${b.tipo}</td><td>${euro(b.importo)}</td><td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td></tr>`).join(""); }
@@ -468,6 +499,7 @@ function bindEvents(){
   $("switchCompanyBtn").addEventListener("click", async () => { if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
   $("saveDayBtn").addEventListener("click", saveDaily);
   $("saveCashInitBtn").addEventListener("click", saveCashInitial);
+  safeEl("saveNewCashBtn")?.addEventListener("click", saveNewCash);
   $("saveMovBtn").addEventListener("click", saveCashMovement);
   $("saveFornBtn").addEventListener("click", saveSupplier);
   $("saveFornMovBtn").addEventListener("click", saveSupplierMovement);
