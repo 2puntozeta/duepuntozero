@@ -860,6 +860,7 @@ function bindEvents() {
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("refreshBtn")?.addEventListener("click", ()=>refreshData("Dati aggiornati dal cloud."));
   safeEl("backupBtn")?.addEventListener("click", exportBackup);
+  safeEl("importBackupBtn")?.addEventListener("click", () => safeEl("importFile")?.click());
   safeEl("importFile")?.addEventListener("change", (e)=>e.target.files[0] && importBackup(e.target.files[0]));
   safeEl("closeAlertModalBtn")?.addEventListener("click", closeAlertModal);
   safeEl("editAlertDayBtn")?.addEventListener("click", editSelectedAlertDay);
