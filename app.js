@@ -260,11 +260,28 @@ async function register() {
   const password = $("registerPassword").value.trim();
   const vatNumber = $("registerVatNumber").value.trim();
   const phone = $("registerPhone").value.trim();
+
   if (!companyName || !email || !password) return showAuthMessage("Compila almeno nome ditta, email e password.", true);
+
+  const { data: existingCompanies, error: checkErr } = await supabase
+    .from("companies")
+    .select("id,name")
+    .ilike("name", companyName);
+
+  if (checkErr) {
+    return showAuthMessage(checkErr.message, true);
+  }
+
+  const duplicate = (existingCompanies || []).some(c => (c.name || "").trim().toLowerCase() === companyName.toLowerCase());
+  if (duplicate) {
+    return showAuthMessage("Esiste già una ditta con questo nome.", true);
+  }
+
   const { error } = await supabase.auth.signUp({
     email, password,
     options: { data: { company_name: companyName, vat_number: vatNumber, phone } }
   });
+
   if (error) return showAuthMessage(error.message, true);
   showAuthMessage("Account creato. Se la conferma email è disattivata, puoi fare login subito.");
   setAuthTab("login");
@@ -335,12 +352,13 @@ async function bootstrapAfterAuth() {
 
   if (!isSupervisor() && state.memberships.length === 1) {
     const onlyCompany = state.memberships[0]?.companies;
-    if (onlyCompany?.status === "pending") {
+    const companyStatus = onlyCompany?.status || "active";
+    if (companyStatus === "pending") {
       hideAllViews();
       safeEl("authView")?.classList.remove("hidden");
       return showAuthMessage("La tua ditta è in attesa di approvazione.", true);
     }
-    if (onlyCompany?.status === "blocked") {
+    if (companyStatus === "blocked") {
       hideAllViews();
       safeEl("authView")?.classList.remove("hidden");
       return showAuthMessage("La tua ditta è stata bloccata.", true);
@@ -1082,6 +1100,8 @@ function bindEvents() {
   safeEl("loginBtn")?.addEventListener("click", login);
   safeEl("rememberEmailChk")?.addEventListener("change", saveRememberedEmail);
   safeEl("loginEmail")?.addEventListener("input", () => { if (safeEl("rememberEmailChk")?.checked) saveRememberedEmail(); });
+  safeEl("rememberEmailChk")?.addEventListener("change", saveRememberedEmail);
+  safeEl("loginEmail")?.addEventListener("input", () => { if (safeEl("rememberEmailChk")?.checked) saveRememberedEmail(); });
   safeEl("registerBtn")?.addEventListener("click", register);
   safeEl("logoutBtn")?.addEventListener("click", logout);
   safeEl("selectorLogoutBtn")?.addEventListener("click", logout);
@@ -1118,6 +1138,7 @@ async function main() {
   try {
     bindEvents();
     seedFields();
+    loadRememberedEmail();
     loadRememberedEmail();
     const ok = await initSupabase();
     if (!ok) return;
