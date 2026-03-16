@@ -434,35 +434,28 @@ async function setCompanyStatus(companyId, status) {
 async function deleteCompanyAdmin(companyId) {
   const company = state.companiesAdmin.find(c => c.id === companyId);
   if (!company) return;
-  if (!confirm(`Vuoi davvero eliminare la ditta "${company.name}"?`)) return;
 
-  const tables = [
-    "daily_records",
-    "cash_state",
-    "custom_cash_state",
-    "cash_movements",
-    "supplier_movements",
-    "suppliers",
-    "employee_movements",
-    "employees",
-    "bookings",
-    "company_users"
-  ];
+  const msg = `Vuoi davvero eliminare TOTALMENTE la ditta "${company.name}"?
 
-  for (const table of tables) {
-    const { error } = await supabase.from(table).delete().eq("company_id", companyId);
-    if (error && table !== "company_users") {
-      return showGlobalMessage(`${table}: ${error.message}`, "error");
-    }
+Verranno eliminati anche dati, collegamenti e account Auth collegati se non usati da altre ditte.`;
+  if (!confirm(msg)) return;
+
+  const { data, error } = await supabase.functions.invoke("delete-company-total", {
+    body: { companyId }
+  });
+
+  if (error) return showGlobalMessage(error.message || "Errore eliminazione totale", "error");
+  if (data?.error) return showGlobalMessage(data.error, "error");
+
+  if (state.activeCompany?.id === companyId) {
+    state.activeCompany = null;
+    selectedCompanyId = null;
   }
-
-  const { error: companyErr } = await supabase.from("companies").delete().eq("id", companyId);
-  if (companyErr) return showGlobalMessage(companyErr.message, "error");
 
   await refreshCompaniesAdmin();
   renderCompanySelector();
   renderCompaniesAdmin();
-  showGlobalMessage("Ditta eliminata.");
+  showGlobalMessage("Ditta eliminata totalmente.");
 }
 
 function renderCompaniesAdmin() {
@@ -487,7 +480,7 @@ function renderCompaniesAdmin() {
         <button class="btn ghost company-approve-btn" data-company-id="${c.id}">Autorizza</button>
         <button class="btn ghost company-pending-btn" data-company-id="${c.id}">Rimetti in attesa</button>
         <button class="btn ghost company-block-btn" data-company-id="${c.id}">Blocca</button>
-        <button class="btn ghost company-delete-btn" data-company-id="${c.id}">Elimina</button>
+        <button class="btn ghost company-delete-btn" data-company-id="${c.id}">Elimina totale</button>
       </td>
     </tr>`;
   }).join("");
@@ -970,7 +963,7 @@ function renderCash() {
     movSelect.innerHTML = [...baseOptions, ...customOptions].join("");
   }
   if (safeEl("customCashTable")) {
-    $("customCashTable").innerHTML = (state.customCashes || []).map(c => `<tr><td>${c.name}</td><td>${euro(c.amount)}</td><td><button class="btn ghost custom-cash-delete-btn" data-cash-name="${c.name}">Elimina</button></td></tr>`).join("") || '<tr><td colspan="3">Nessuna cassa personalizzata</td></tr>';
+    $("customCashTable").innerHTML = (state.customCashes || []).map(c => `<tr><td>${c.name}</td><td>${euro(c.amount)}</td><td><button class="btn ghost custom-cash-delete-btn" data-cash-name="${c.name}">Elimina totale</button></td></tr>`).join("") || '<tr><td colspan="3">Nessuna cassa personalizzata</td></tr>';
     document.querySelectorAll(".custom-cash-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteCustomCash(btn.dataset.cashName)));
   }
   if (safeEl("movimentiTable")) {
@@ -982,7 +975,7 @@ function renderCash() {
       <td>${euro(m.importo)}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn ghost cash-edit-btn" data-cash-id="${m.id}">Modifica</button>
-        <button class="btn ghost cash-delete-btn" data-cash-id="${m.id}">Elimina</button>
+        <button class="btn ghost cash-delete-btn" data-cash-id="${m.id}">Elimina totale</button>
       </td>
     </tr>`).join("");
     document.querySelectorAll(".cash-edit-btn").forEach(btn => btn.addEventListener("click", ()=>{
@@ -1007,7 +1000,7 @@ function renderSuppliers() {
       <td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn ghost supplier-edit-btn" data-supplier-name="${s.nome}">Modifica</button>
-        <button class="btn ghost supplier-delete-btn" data-supplier-name="${s.nome}">Elimina</button>
+        <button class="btn ghost supplier-delete-btn" data-supplier-name="${s.nome}">Elimina totale</button>
       </td>
     </tr>`;
   }).join("");
@@ -1032,7 +1025,7 @@ function renderEmployees() {
       <td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn ghost employee-edit-btn" data-employee-name="${e.nome}">Modifica</button>
-        <button class="btn ghost employee-delete-btn" data-employee-name="${e.nome}">Elimina</button>
+        <button class="btn ghost employee-delete-btn" data-employee-name="${e.nome}">Elimina totale</button>
       </td>
     </tr>`;
   }).join("");
