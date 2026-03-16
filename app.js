@@ -5,7 +5,7 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 const invalidConfig =
   !SUPABASE_URL ||
   !SUPABASE_ANON_KEY ||
-  SUPABASE_URL.includes("INCOLLA_QUI") ||
+  SUPABASE_URL.includes("https://qhgnyldwpjitiigxvzed.supabase.co") ||
   SUPABASE_ANON_KEY.includes("INCOLLA_QUI");
 
 const state = {
