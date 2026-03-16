@@ -23,7 +23,6 @@ let supabase = null;
 let selectedCompanyId = null;
 
 const $ = (id) => document.getElementById(id);
-const safeEl = (id) => document.getElementById(id);
 const euro = (v) => new Intl.NumberFormat("it-IT",{style:"currency",currency:"EUR"}).format(Number(v || 0));
 const n = (v) => Number(v || 0);
 const todayStr = () => new Date().toISOString().slice(0,10);
@@ -105,6 +104,41 @@ async function deleteCustomCash(name){
   const { error } = await supabase.from("custom_cash_state").delete().eq("company_id", state.activeCompany.id).eq("name", name);
   if(error){ showGlobalMessage(error.message, "error"); return; }
   await refreshData("Cassa personalizzata cancellata.");
+}
+
+async function editSupplierByName(name){
+  const s = state.suppliers.find(x => x.nome === name);
+  if(!s) return;
+  const newName = prompt("Nome fornitore", s.nome);
+  if(newName === null) return;
+  const newAlias = prompt("Alias fornitore", (s.aliases || []).join(", "));
+  if(newAlias === null) return;
+  const newSospeso = prompt("Sospeso iniziale", s.sospeso_iniziale ?? 0);
+  if(newSospeso === null) return;
+  const { error } = await supabase.from("suppliers").update({
+    nome: newName.trim() || s.nome,
+    aliases: newAlias.trim() ? newAlias.split(",").map(v => v.trim()).filter(Boolean) : [],
+    sospeso_iniziale: Number(newSospeso || 0)
+  }).eq("id", s.id).eq("company_id", state.activeCompany.id);
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  await refreshData("Fornitore aggiornato.");
+}
+async function editEmployeeByName(name){
+  const e = state.employees.find(x => x.nome === name);
+  if(!e) return;
+  const newName = prompt("Nome dipendente", e.nome);
+  if(newName === null) return;
+  const newRole = prompt("Ruolo", e.ruolo || "");
+  if(newRole === null) return;
+  const newDue = prompt("Dovuto mensile", e.dovuto_mensile ?? 0);
+  if(newDue === null) return;
+  const { error } = await supabase.from("employees").update({
+    nome: newName.trim() || e.nome,
+    ruolo: newRole,
+    dovuto_mensile: Number(newDue || 0)
+  }).eq("id", e.id).eq("company_id", state.activeCompany.id);
+  if(error){ showGlobalMessage(error.message, "error"); return; }
+  await refreshData("Dipendente aggiornato.");
 }
 function supplierSuspeso(s){
   const moves = state.supplierMovements.filter(m => m.supplier_id === s.id);
@@ -202,13 +236,24 @@ async function logout(){
   $("authView").classList.remove("hidden");
 }
 async function fetchProfileAndMemberships(){
-  const [{ data: profile, error: pErr }, { data: memberships, error: mErr }] = await Promise.all([
-    supabase.from("profiles").select("*").eq("id", state.session.user.id).single(),
-    supabase.from("company_users").select("id, role, company_id, companies(id, name, vat_number)").order("created_at", { ascending: true })
-  ]);
+  const { data: profile, error: pErr } = await supabase.from("profiles").select("*").eq("id", state.session.user.id).single();
   if(pErr) throw pErr;
-  if(mErr) throw mErr;
   state.profile = profile;
+
+  if(profile?.global_role === "supervisor"){
+    const { data: companies, error: cErr } = await supabase.from("companies").select("id, name, vat_number").order("created_at", { ascending: true });
+    if(cErr) throw cErr;
+    state.memberships = (companies || []).map(c => ({
+      id: `supervisor-${c.id}`,
+      role: "supervisor",
+      company_id: c.id,
+      companies: c
+    }));
+    return;
+  }
+
+  const { data: memberships, error: mErr } = await supabase.from("company_users").select("id, role, company_id, companies(id, name, vat_number)").order("created_at", { ascending: true });
+  if(mErr) throw mErr;
   state.memberships = memberships || [];
 }
 function renderCompanySelector(){
@@ -483,34 +528,31 @@ function renderCash(){
 
   if (safeEl("movimentiTable")) $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join("");
 }
-function renderSuppliers(){ $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join(""); $("fornitoriTable").innerHTML = state.suppliers.map(s=>{ const sosp = supplierSuspeso(s); const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0]; return `<tr><td>${s.nome}</td><td>${(s.aliases || []).join(", ") || "—"}</td><td>${euro(sosp)}</td><td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td><td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td></tr>`; }).join(""); }
-function renderEmployees(){ $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join(""); $("dipendentiTable").innerHTML = state.employees.map(e=>{ const pagato = employeePaid(e); const residuo = n(e.dovuto_mensile) - pagato; return `<tr><td>${e.nome}</td><td>${e.ruolo || "—"}</td><td>${euro(e.dovuto_mensile)}</td><td>${euro(pagato)}</td><td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td></tr>`; }).join(""); }
-function renderBookings(){ $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr><td>${b.data}</td><td>${b.nome}</td><td>${b.adulti}+${b.bambini}</td><td>${b.tipo}</td><td>${euro(b.importo)}</td><td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td></tr>`).join(""); }
-function runMonthlyReport(){ const month = String($("reportMonth").value).padStart(2,"0"); const year = String($("reportYear").value); const records = state.dailyRecords.filter(r => r.data.startsWith(`${year}-${month}`)); let copPranzo=0, copCena=0, copBanchetti=0, incasso=0, asporto=0, bancone=0, pizze=0; records.forEach(r=>{ copPranzo += n(r.pranzo.coperti); copCena += n(r.cena.coperti); copBanchetti += n(r.banchetti.coperti); incasso += getDailyTotals(r).totalIncasso; asporto += n(r.pranzo.asporto)+n(r.cena.asporto)+n(r.banchetti.asporto); bancone += n(r.bancone); pizze += n(r.pizze); }); $("rCopPranzo").textContent = copPranzo; $("rCopCena").textContent = copCena; $("rCopBanchetti").textContent = copBanchetti; $("rIncasso").textContent = euro(incasso); $("reportSummary").innerHTML = [`<div class="item"><div><strong>Totale coperti complessivi</strong><small>pranzo + cena + banchetti</small></div><div>${copPranzo + copCena + copBanchetti}</div></div>`,`<div class="item"><div><strong>Asporto totale</strong><small>somma delle tre colonne</small></div><div>${euro(asporto)}</div></div>`,`<div class="item"><div><strong>Bancone totale</strong><small>incasso registrato a bancone</small></div><div>${euro(bancone)}</div></div>`,`<div class="item"><div><strong>Pizze totali</strong><small>somma delle giornate del mese</small></div><div>${pizze}</div></div>`,`<div class="item"><div><strong>Giornate presenti</strong><small>schede giornaliere salvate nel mese</small></div><div>${records.length}</div></div>`].join(""); }
-function renderAll(){ renderDashboard(); renderDailyTable(); renderCash(); renderSuppliers(); renderEmployees(); renderBookings(); runMonthlyReport(); }
+function renderSuppliers(){
+  const select = safeEl("fornMovNome");
+  if (select) {
+    select.innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join("");
+  }
 
-function bindEvents(){
-  document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
-  document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
-  $("loginBtn").addEventListener("click", login);
-  $("registerBtn").addEventListener("click", register);
-  $("logoutBtn").addEventListener("click", logout);
-  $("selectorLogoutBtn").addEventListener("click", logout);
-  $("enterCompanyBtn").addEventListener("click", async () => { if(!selectedCompanyId){ alert("Seleziona una ditta."); return; } await openCompany(selectedCompanyId); });
-  $("switchCompanyBtn").addEventListener("click", async () => { if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
-  $("saveDayBtn").addEventListener("click", saveDaily);
-  $("saveCashInitBtn").addEventListener("click", saveCashInitial);
-  safeEl("saveNewCashBtn")?.addEventListener("click", saveNewCash);
-  $("saveMovBtn").addEventListener("click", saveCashMovement);
-  $("saveFornBtn").addEventListener("click", saveSupplier);
-  $("saveFornMovBtn").addEventListener("click", saveSupplierMovement);
-  $("saveDipBtn").addEventListener("click", saveEmployee);
-  $("saveDipMovBtn").addEventListener("click", saveEmployeeMovement);
-  $("saveBanBtn").addEventListener("click", saveBooking);
-  $("runReportBtn").addEventListener("click", runMonthlyReport);
-  $("refreshBtn").addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
-  $("backupBtn").addEventListener("click", exportBackup);
-  $("importFile").addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
+  const table = safeEl("fornitoriTable");
+  if (!table) return;
+
+  table.innerHTML = state.suppliers.map(s=>{
+    const sosp = supplierSuspeso(s);
+    const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0];
+    return `<tr>
+      <td>${s.nome}</td>
+      <td>${(s.aliases || []).join(", ") || "—"}</td>
+      <td>${euro(sosp)}</td>
+      <td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td>
+      <td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td>
+      <td><button class="btn ghost supplier-edit-btn" data-supplier-name="${s.nome}" style="padding:6px 10px;">Modifica</button></td>
+    </tr>`;
+  }).join("");
+
+  document.querySelectorAll(".supplier-edit-btn").forEach(btn => {
+    btn.addEventListener("click", () => editSupplierByName(btn.dataset.supplierName));
+  });
 }
 async function main(){
   try{
