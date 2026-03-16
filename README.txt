@@ -46,3 +46,19 @@ V5 ALERT + MODIFICA GIORNATA
 - il form della scheda giornaliera viene compilato automaticamente
 - correggi e premi di nuovo "Salva giornata"
 - dalla tabella giornate puoi cliccare direttamente sulla data per ricaricare la giornata nel form
+
+
+V6 MODIFICA / CANCELLA / CONFERMA ALERT
+- puoi modificare o cancellare una giornata dalla tabella giornate
+- puoi modificare o cancellare banchetti e prenotazioni
+- rimosso il pulsante "Carica demo cloud"
+- se una giornata genera alert, prima del salvataggio esce una finestra con:
+  - elenco alert
+  - pulsante "Carica comunque"
+  - pulsante "Rivedi"
+- dalla dashboard:
+  - clic su Fornitori aperti -> apre Fornitori
+  - clic su Alert attivi -> ti porta agli alert in dashboard
+  - clic su Coperti totali -> apre Scheda giornaliera
+  - clic su Incasso ultima giornata -> apre Scheda giornaliera
+- clic sugli alert in dashboard -> dettaglio alert + possibilità di modificare la giornata
