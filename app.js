@@ -1,12 +1,9 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
 
-const invalidConfig =
-  !SUPABASE_URL ||
-  !SUPABASE_ANON_KEY ||
-  SUPABASE_URL.includes("https://qhgnyldwpjitiigxvzed.supabase.co") ||
-  SUPABASE_ANON_KEY.includes("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek");
+const SUPABASE_URL = "https://qhgnyldwpjitiigxvzed.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek";
+const invalidConfig = false;
 
 const state = {
   session: null,
@@ -183,7 +180,6 @@ function computeGlobalAlerts(){
 }
 
 async function initSupabase(){
-  if(invalidConfig){ hideAllViews(); $("bootScreen").classList.remove("hidden"); return false; }
   supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const { data: { session } } = await supabase.auth.getSession();
   state.session = session;
