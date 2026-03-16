@@ -377,6 +377,111 @@ async function saveDaily(){
   await refreshData("Scheda giornaliera salvata.");
   resetDailyForm();
 }
+function startSupplierEdit(supplier){
+  editingSupplierId = supplier.id;
+  if (safeEl("fornNome")) $("fornNome").value = supplier.nome || "";
+  if (safeEl("fornAlias")) $("fornAlias").value = (supplier.aliases || []).join(", ");
+  if (safeEl("fornSospeso")) $("fornSospeso").value = supplier.sospeso_iniziale ?? 0;
+  if (safeEl("saveFornBtn")) $("saveFornBtn").textContent = "Aggiorna fornitore";
+  if (safeEl("cancelFornEditBtn")) $("cancelFornEditBtn").classList.remove("hidden");
+  if (safeEl("fornFormHint")) $("fornFormHint").textContent = Stai modificando: ${supplier.nome};
+  navigate("fornitori");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetSupplierForm(){
+  editingSupplierId = null;
+  if (safeEl("fornNome")) $("fornNome").value = "";
+  if (safeEl("fornAlias")) $("fornAlias").value = "";
+  if (safeEl("fornSospeso")) $("fornSospeso").value = 0;
+  if (safeEl("saveFornBtn")) $("saveFornBtn").textContent = "Salva fornitore";
+  if (safeEl("cancelFornEditBtn")) $("cancelFornEditBtn").classList.add("hidden");
+  if (safeEl("fornFormHint")) $("fornFormHint").textContent = "Inserisci o modifica un fornitore.";
+}
+
+async function deleteSupplierByName(name){
+  const s = state.suppliers.find(x => x.nome === name);
+  if(!s) return;
+  if(!confirm(`Vuoi davvero eliminare il fornitore "${name}"?`)) return;
+
+  const delMoves = await supabase
+    .from("supplier_movements")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("supplier_id", s.id);
+
+  if(delMoves.error){
+    showGlobalMessage(delMoves.error.message, "error");
+    return;
+  }
+
+  const delSupp = await supabase
+    .from("suppliers")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("id", s.id);
+
+  if(delSupp.error){
+    showGlobalMessage(delSupp.error.message, "error");
+    return;
+  }
+
+  resetSupplierForm();
+  await refreshData("Fornitore eliminato.");
+}
+
+function startEmployeeEdit(employee){
+  editingEmployeeId = employee.id;
+  if (safeEl("dipNome")) $("dipNome").value = employee.nome || "";
+  if (safeEl("dipRuolo")) $("dipRuolo").value = employee.ruolo || "";
+  if (safeEl("dipDovuto")) $("dipDovuto").value = employee.dovuto_mensile ?? 0;
+  if (safeEl("saveDipBtn")) $("saveDipBtn").textContent = "Aggiorna dipendente";
+  if (safeEl("cancelDipEditBtn")) $("cancelDipEditBtn").classList.remove("hidden");
+  if (safeEl("dipFormHint")) $("dipFormHint").textContent = Stai modificando: ${employee.nome};
+  navigate("dipendenti");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetEmployeeForm(){
+  editingEmployeeId = null;
+  if (safeEl("dipNome")) $("dipNome").value = "";
+  if (safeEl("dipRuolo")) $("dipRuolo").value = "";
+  if (safeEl("dipDovuto")) $("dipDovuto").value = 0;
+  if (safeEl("saveDipBtn")) $("saveDipBtn").textContent = "Salva dipendente";
+  if (safeEl("cancelDipEditBtn")) $("cancelDipEditBtn").classList.add("hidden");
+  if (safeEl("dipFormHint")) $("dipFormHint").textContent = "Inserisci o modifica un dipendente.";
+}
+
+async function deleteEmployeeByName(name){
+  const e = state.employees.find(x => x.nome === name);
+  if(!e) return;
+  if(!confirm(`Vuoi davvero eliminare il dipendente "${name}"?`)) return;
+
+  const delMoves = await supabase
+    .from("employee_movements")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("employee_id", e.id);
+
+  if(delMoves.error){
+    showGlobalMessage(delMoves.error.message, "error");
+    return;
+  }
+
+  const delEmp = await supabase
+    .from("employees")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("id", e.id);
+
+  if(delEmp.error){
+    showGlobalMessage(delEmp.error.message, "error");
+    return;
+  }
+
+  resetEmployeeForm();
+  await refreshData("Dipendente eliminato.");
+}
 async function saveSupplier(){
   const nome = $("fornNome").value.trim();
   const alias = $("fornAlias").value.trim();
