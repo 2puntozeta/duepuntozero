@@ -32,7 +32,7 @@
       </div>
 
       <h1>Accesso</h1>
-      <p>Registrazione e login con email e password.</p>
+      <p>Registrazione con nome ditta, email e password.</p>
 
       <div class="tab-switch">
         <button class="tab-btn active" data-auth-tab="login">Login</button>
@@ -49,9 +49,12 @@
 
       <div id="registerTab" class="auth-tab hidden">
         <div style="display:grid;gap:12px;">
+          <div><label>Nome ditta</label><input id="registerCompanyName" placeholder="es. Pizzeria Armogida" /></div>
+          <div><label>Partita IVA (facoltativa)</label><input id="registerVatNumber" placeholder="facoltativa" /></div>
+          <div><label>Telefono (facoltativo)</label><input id="registerPhone" placeholder="facoltativo" /></div>
           <div><label>Email</label><input id="registerEmail" type="email" placeholder="nome@email.com" /></div>
           <div><label>Password</label><input id="registerPassword" type="password" placeholder="Password" /></div>
-          <button id="registerBtn">Crea account</button>
+          <button id="registerBtn">Crea account e ditta</button>
         </div>
       </div>
 
