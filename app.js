@@ -242,7 +242,7 @@ async function fetchCompanyTable(table, orderColumn="created_at", ascending=true
   return data || [];
 }
 async function loadCompanyData(){
-  const [daily_records, cash_state, cash_movements, suppliers, supplier_movements, employees, employee_movements, bookings] = await Promise.all([
+  const [daily_records, cash_state, cash_movements, suppliers, supplier_movements, employees, employee_movements, bookings, custom_cash_state] = await Promise.all([
     fetchCompanyTable("daily_records", "data", true),
     fetchCompanyTable("cash_state", "kind", true),
     fetchCompanyTable("cash_movements", "data", true),
@@ -250,7 +250,8 @@ async function loadCompanyData(){
     fetchCompanyTable("supplier_movements", "data", true),
     fetchCompanyTable("employees", "nome", true),
     fetchCompanyTable("employee_movements", "data", true),
-    fetchCompanyTable("bookings", "data", true)
+    fetchCompanyTable("bookings", "data", true),
+    fetchCompanyTable("custom_cash_state", "name", true)
   ]);
   state.dailyRecords = daily_records.map(r => r.payload);
   state.cashMovements = cash_movements;
