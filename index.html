@@ -32,7 +32,7 @@
       </div>
 
       <h1>Accesso</h1>
-      <p>Registrazione con nome ditta, email e password.</p>
+      <p>Registrazione azienda con nome ditta, email e password.</p>
 
       <div class="tab-switch">
         <button class="tab-btn active" data-auth-tab="login">Login</button>
@@ -132,10 +132,10 @@
 
       <section id="dashboard" class="section active">
         <div class="grid cards">
-          <div class="card metric" id="cardIncasso" style="cursor:pointer;"><div class="label">Incasso ultima giornata</div><div class="value" id="kpiIncasso">€ 0,00</div><div class="sub ok">dato live dalla scheda giornaliera</div></div>
-          <div class="card metric" id="cardCoperti" style="cursor:pointer;"><div class="label">Coperti totali</div><div class="value" id="kpiCoperti">0</div><div class="sub">pranzo + cena + banchetti</div></div>
-          <div class="card metric" id="cardFornitori" style="cursor:pointer;"><div class="label">Fornitori aperti</div><div class="value" id="kpiFornitori">0</div><div class="sub warn">con sospeso residuo</div></div>
-          <div class="card metric" id="cardAlert" style="cursor:pointer;"><div class="label">Alert attivi</div><div class="value" id="kpiAlert">0</div><div class="sub bad">errori da controllare</div></div>
+          <div class="card metric"><div class="label">Incasso ultima giornata</div><div class="value" id="kpiIncasso">€ 0,00</div><div class="sub ok">dato live dalla scheda giornaliera</div></div>
+          <div class="card metric"><div class="label">Coperti totali</div><div class="value" id="kpiCoperti">0</div><div class="sub">pranzo + cena + banchetti</div></div>
+          <div class="card metric"><div class="label">Fornitori aperti</div><div class="value" id="kpiFornitori">0</div><div class="sub warn">con sospeso residuo</div></div>
+          <div class="card metric"><div class="label">Alert attivi</div><div class="value" id="kpiAlert">0</div><div class="sub bad">errori da controllare</div></div>
         </div>
 
         <div class="split" style="margin-top:16px;">
@@ -338,7 +338,7 @@
 
         <div class="card" style="margin-top:16px;">
           <h3 class="section-title">Prenotazioni registrate</h3>
-          <div style="overflow:auto;"><table><thead><tr><th>Data</th><th>Evento</th><th>Persone</th><th>Tipo</th><th>Importo</th><th>Ora / Note</th><th>Azioni</th></tr></thead><tbody id="banchettiTable"></tbody></table></div>
+          <div style="overflow:auto;"><table><thead><tr><th>Data</th><th>Evento</th><th>Persone</th><th>Tipo</th><th>Importo</th><th>Ora / Note</th></tr></thead><tbody id="banchettiTable"></tbody></table></div>
         </div>
       </section>
 
@@ -365,56 +365,6 @@
         </div>
       </section>
     </main>
-  </div>
-
-  <div id="alertModal" class="login-wrap hidden" style="background:rgba(2,6,23,.78);position:fixed;inset:0;z-index:2000;">
-    <div class="login-card" style="width:min(760px,100%);">
-      <div class="toolbar">
-        <div>
-          <h1 style="margin:0;font-size:24px;">Dettaglio alert giornata</h1>
-          <p id="alertModalDate" class="muted" style="margin:6px 0 0;">Data giornata</p>
-        </div>
-        <button class="btn secondary" id="closeAlertModalBtn">Chiudi</button>
-      </div>
-
-      <div class="card" style="margin-top:14px;padding:14px;">
-        <h3 class="section-title" style="margin:0 0 10px 0;">Perché è uscito l'alert</h3>
-        <div id="alertReasons" class="list"></div>
-      </div>
-
-      <div class="card" style="margin-top:14px;padding:14px;">
-        <h3 class="section-title" style="margin:0 0 10px 0;">Riepilogo rapido</h3>
-        <div id="alertQuickSummary" class="list"></div>
-      </div>
-
-      <div class="toolbar" style="margin-top:14px;">
-        <div class="muted tiny">Puoi caricare automaticamente i dati nel form per correggere la giornata.</div>
-        <button id="editAlertDayBtn">Modifica questa giornata</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="confirmSaveModal" class="login-wrap hidden" style="background:rgba(2,6,23,.78);position:fixed;inset:0;z-index:2200;">
-    <div class="login-card" style="width:min(760px,100%);">
-      <div class="toolbar">
-        <div>
-          <h1 style="margin:0;font-size:24px;">Controllo alert prima del salvataggio</h1>
-          <p class="muted" id="confirmSaveDate" style="margin:6px 0 0;">Data giornata</p>
-        </div>
-        <button class="btn secondary" id="closeConfirmSaveModalBtn">Chiudi</button>
-      </div>
-      <div class="card" style="margin-top:14px;padding:14px;">
-        <h3 class="section-title" style="margin:0 0 10px 0;">Alert trovati</h3>
-        <div id="confirmSaveAlerts" class="list"></div>
-      </div>
-      <div class="toolbar" style="margin-top:14px;">
-        <div class="muted tiny">Puoi tornare indietro a correggere oppure salvare comunque.</div>
-        <div style="display:flex;gap:10px;">
-          <button class="btn secondary" id="reviewDayBtn">Rivedi</button>
-          <button id="forceSaveDayBtn">Carica comunque</button>
-        </div>
-      </div>
-    </div>
   </div>
 
   <script type="module" src="./app.js"></script>

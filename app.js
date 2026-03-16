@@ -1,9 +1,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
 const SUPABASE_URL = "https://qhgnyldwpjitiigxvzed.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFoZ255bGR3cGppdGlpZ3h2emVkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1OTA1MjcsImV4cCI6MjA4OTE2NjUyN30.Vc9bz9Ntj-bMpiHHvKuNWVs8OMB6Jx329eYL7Qw25Ek";
-const invalidConfig = false;
 
 const state = {
   session: null,
@@ -89,71 +87,6 @@ function validateDaily(rec){
   if(totals.totalIncasso <= 0 && copertiTot > 0) alerts.push("Ci sono coperti ma l'incasso totale è zero.");
   return alerts;
 }
-
-function fillDailyForm(rec){
-  $("gData").value = rec.data || "";
-  $("gPizze").value = rec.pizze ?? 0;
-  $("gCopertiRistorante").value = rec.copertiRistorante ?? 0;
-  $("gMenu").value = rec.menu ?? 0;
-  $("gSupplementi").value = rec.supplementi ?? 0;
-  $("gPortate").value = rec.portate ?? 0;
-  $("gBancone").value = rec.bancone ?? 0;
-  $("gNote").value = rec.note || "";
-
-  $("pranzoCoperti").value = rec.pranzo?.coperti ?? 0;
-  $("pranzoAsporto").value = rec.pranzo?.asporto ?? 0;
-  $("pranzoContanti").value = rec.pranzo?.contanti ?? 0;
-  $("pranzoPos").value = rec.pranzo?.pos ?? 0;
-
-  $("cenaCoperti").value = rec.cena?.coperti ?? 0;
-  $("cenaAsporto").value = rec.cena?.asporto ?? 0;
-  $("cenaContanti").value = rec.cena?.contanti ?? 0;
-  $("cenaPos").value = rec.cena?.pos ?? 0;
-
-  $("banchettiCoperti").value = rec.banchetti?.coperti ?? 0;
-  $("banchettiAsporto").value = rec.banchetti?.asporto ?? 0;
-  $("banchettiContanti").value = rec.banchetti?.contanti ?? 0;
-  $("banchettiPos").value = rec.banchetti?.pos ?? 0;
-}
-function openAlertModalByDate(dateStr){
-  const rec = state.dailyRecords.find(r => r.data === dateStr);
-  if(!rec) return;
-  selectedAlertRecord = rec;
-  const alerts = validateDaily(rec);
-  const totals = getDailyTotals(rec);
-
-  $("alertModalDate").textContent = `Giornata: ${rec.data}`;
-  $("alertReasons").innerHTML = alerts.length
-    ? alerts.map(a => `<div class="item"><div><strong>Alert</strong><small>${a}</small></div></div>`).join("")
-    : `<div class="alert okline">Nessun alert attivo per questa giornata.</div>`;
-
-  const summaryItems = [
-    ["Coperti totali", totals.totalCoperti],
-    ["Coperti ristorante", rec.copertiRistorante ?? 0],
-    ["Incasso totale", euro(totals.totalIncasso)],
-    ["Pizze", rec.pizze ?? 0],
-    ["Menù / Supplementi", `${rec.menu ?? 0} / ${rec.supplementi ?? 0}`],
-    ["Pranzo", `Coperti ${rec.pranzo?.coperti ?? 0} · Contanti ${euro(rec.pranzo?.contanti ?? 0)} · POS ${euro(rec.pranzo?.pos ?? 0)}`],
-    ["Cena", `Coperti ${rec.cena?.coperti ?? 0} · Contanti ${euro(rec.cena?.contanti ?? 0)} · POS ${euro(rec.cena?.pos ?? 0)}`],
-    ["Banchetti", `Coperti ${rec.banchetti?.coperti ?? 0} · Contanti ${euro(rec.banchetti?.contanti ?? 0)} · POS ${euro(rec.banchetti?.pos ?? 0)}`],
-  ];
-  $("alertQuickSummary").innerHTML = summaryItems.map(([t,v]) => `<div class="item"><div><strong>${t}</strong></div><div>${v}</div></div>`).join("");
-  $("alertModal").classList.remove("hidden");
-}
-function closeAlertModal(){
-  $("alertModal").classList.add("hidden");
-}
-function editSelectedAlertDay(){
-  if(!selectedAlertRecord) return;
-  fillDailyForm(selectedAlertRecord);
-  closeAlertModal();
-  navigate("giornaliera");
-  const fb = $("giornalieraFeedback");
-  if(fb){
-    fb.innerHTML = `<div class="alert okline">Hai caricato la giornata ${selectedAlertRecord.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
-  }
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
 function supplierSuspeso(s){
   const moves = state.supplierMovements.filter(m => m.supplier_id === s.id);
   const fatture = moves.filter(m=>m.tipo==="fattura").reduce((a,b)=>a+n(b.importo),0);
@@ -192,6 +125,7 @@ async function initSupabase(){
     state.session = session;
     return true;
   }catch(err){
+    console.error(err);
     hideAllViews();
     $("authView").classList.remove("hidden");
     showAuthMessage("Errore avvio app: " + (err?.message || err), true);
@@ -210,9 +144,9 @@ async function login(){
   await bootstrapAfterAuth();
 }
 async function register(){
-  const companyName = $("registerCompanyName")?.value.trim() || "";
-  const vatNumber = $("registerVatNumber")?.value.trim() || "";
-  const phone = $("registerPhone")?.value.trim() || "";
+  const companyName = $("registerCompanyName").value.trim();
+  const vatNumber = $("registerVatNumber").value.trim();
+  const phone = $("registerPhone").value.trim();
   const email = $("registerEmail").value.trim();
   const password = $("registerPassword").value.trim();
 
@@ -356,14 +290,8 @@ async function saveCashMovement(){
   if(error){ showGlobalMessage(error.message, "error"); return; }
   await refreshData("Movimento di cassa salvato.");
 }
-async function persistDailyRecord(rec){
-  const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
-  if(error){ showGlobalMessage(error.message, "error"); return false; }
-  return true;
-}
-
-function collectDailyFromForm(){
-  return {
+async function saveDaily(){
+  const rec = {
     data: $("gData").value,
     pizze: n($("gPizze").value),
     copertiRistorante: n($("gCopertiRistorante").value),
@@ -376,36 +304,11 @@ function collectDailyFromForm(){
     cena: { coperti: n($("cenaCoperti").value), asporto: n($("cenaAsporto").value), contanti: n($("cenaContanti").value), pos: n($("cenaPos").value) },
     banchetti: { coperti: n($("banchettiCoperti").value), asporto: n($("banchettiAsporto").value), contanti: n($("banchettiContanti").value), pos: n($("banchettiPos").value) }
   };
-}
-function openConfirmSaveModal(rec, alerts){
-  pendingDailyRecord = rec;
-  $("confirmSaveDate").textContent = `Giornata: ${rec.data}`;
-  $("confirmSaveAlerts").innerHTML = alerts.map(a => `<div class="item"><div><strong>Alert</strong><small>${a}</small></div></div>`).join("");
-  $("confirmSaveModal").classList.remove("hidden");
-}
-function closeConfirmSaveModal(){
-  $("confirmSaveModal").classList.add("hidden");
-}
-async function forceSavePendingDay(){
-  if(!pendingDailyRecord) return;
-  const ok = await persistDailyRecord(pendingDailyRecord);
-  if(!ok) return;
-  $("giornalieraFeedback").innerHTML = `<div class="alert">Scheda salvata con alert confermati. Controlla i dati quando puoi.</div>`;
-  closeConfirmSaveModal();
-  await refreshData("Scheda giornaliera salvata.");
-  pendingDailyRecord = null;
-}
-async function saveDaily(){
-  const rec = collectDailyFromForm();
   if(!rec.data){ showGlobalMessage("Inserisci la data.", "error"); return; }
+  const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
+  if(error){ showGlobalMessage(error.message, "error"); return; }
   const alerts = validateDaily(rec);
-  if(alerts.length){
-    openConfirmSaveModal(rec, alerts);
-    return;
-  }
-  const ok = await persistDailyRecord(rec);
-  if(!ok) return;
-  $("giornalieraFeedback").innerHTML = `<div class="alert okline">Giornata salvata correttamente. Nessun alert bloccante nella V1.</div>`;
+  $("giornalieraFeedback").innerHTML = alerts.length ? `<div class="alert">${alerts.map(a => `• ${a}`).join("<br>")}</div>` : `<div class="alert okline">Giornata salvata correttamente. Nessun alert bloccante nella V1.</div>`;
   await refreshData("Scheda giornaliera salvata.");
 }
 async function saveSupplier(){
@@ -519,62 +422,6 @@ async function seedDemoCloud(){
   await supabase.from("bookings").insert([{ company_id: state.activeCompany.id, data:"2026-03-20", nome:"Compleanno Cristian", adulti:40, bambini:3, tipo:"banchetto", importo:900, ora:"20:30", note:"40+3" }, { company_id: state.activeCompany.id, data:"2026-03-22", nome:"Dragon", adulti:45, bambini:0, tipo:"giro_pizza", importo:720, ora:"21:00", note:"GP" }]);
   await refreshData("Dati demo cloud caricati.");
 }
-
-async function deleteDailyByDate(dateStr){
-  if(!confirm(`Vuoi davvero cancellare la giornata ${dateStr}?`)) return;
-  const { error } = await supabase.from("daily_records").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr);
-  if(error){ showGlobalMessage(error.message, "error"); return; }
-  await refreshData("Giornata cancellata.");
-}
-function loadDailyByDate(dateStr){
-  const rec = state.dailyRecords.find(r => r.data === dateStr);
-  if(!rec) return;
-  fillDailyForm(rec);
-  navigate("giornaliera");
-  $("giornalieraFeedback").innerHTML = `<div class="alert okline">Hai caricato la giornata ${rec.data} nel form. Modifica i campi e premi "Salva giornata".</div>`;
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-function fillBookingForm(b){
-  $("banData").value = b.data || "";
-  $("banNome").value = b.nome || "";
-  $("banAdulti").value = b.adulti ?? 0;
-  $("banBambini").value = b.bambini ?? 0;
-  $("banTipo").value = b.tipo || "banchetto";
-  $("banImporto").value = b.importo ?? 0;
-  $("banOra").value = b.ora || "";
-  $("banNote").value = b.note || "";
-}
-async function saveBooking(){
-  const existingId = $("saveBanBtn").dataset.editId || "";
-  const payload = { company_id: state.activeCompany.id, data: $("banData").value, nome: $("banNome").value.trim(), adulti: n($("banAdulti").value), bambini: n($("banBambini").value), tipo: $("banTipo").value, importo: n($("banImporto").value), ora: $("banOra").value.trim(), note: $("banNote").value.trim() };
-  if(!payload.data || !payload.nome){ showGlobalMessage("Inserisci data e nome evento.", "error"); return; }
-  const query = existingId
-    ? supabase.from("bookings").update(payload).eq("id", existingId).eq("company_id", state.activeCompany.id)
-    : supabase.from("bookings").insert(payload);
-  const { error } = await query;
-  if(error){ showGlobalMessage(error.message, "error"); return; }
-  $("saveBanBtn").dataset.editId = "";
-  $("saveBanBtn").textContent = "Salva prenotazione";
-  await refreshData(existingId ? "Prenotazione aggiornata." : "Prenotazione salvata.");
-}
-function editBookingById(id){
-  const b = state.bookings.find(x => x.id === id);
-  if(!b) return;
-  fillBookingForm(b);
-  $("saveBanBtn").dataset.editId = id;
-  $("saveBanBtn").textContent = "Aggiorna prenotazione";
-  navigate("banchetti");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-async function deleteBookingById(id){
-  const b = state.bookings.find(x => x.id === id);
-  if(!b) return;
-  if(!confirm(`Vuoi davvero cancellare la prenotazione "${b.nome}" del ${b.data}?`)) return;
-  const { error } = await supabase.from("bookings").delete().eq("id", id).eq("company_id", state.activeCompany.id);
-  if(error){ showGlobalMessage(error.message, "error"); return; }
-  await refreshData("Prenotazione cancellata.");
-}
-
 function renderDashboard(){
   const last = [...state.dailyRecords].sort((a,b)=>b.data.localeCompare(a.data))[0];
   const totals = last ? getDailyTotals(last) : { totalIncasso:0, totalCoperti:0 };
@@ -588,57 +435,54 @@ function renderDashboard(){
   $("cashPos").textContent = euro(balances.pos);
   $("cashAllianz").textContent = euro(balances.allianz);
   $("cashPostepay").textContent = euro(balances.postepay);
-  $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item alert-row" data-alert-date="${a.title}" style="cursor:pointer;"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">vedi</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
-  document.querySelectorAll(".alert-row").forEach(row => row.addEventListener("click", () => openAlertModalByDate(row.dataset.alertDate)));
+  $("alertsBox").innerHTML = alerts.length ? alerts.slice(0,8).map(a => `<div class="item"><div><strong>${a.title}</strong><small>${a.text}</small></div><span class="tag">alert</span></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
   $("dashboardFornitori").innerHTML = state.suppliers.slice(-5).reverse().map(s=>`<div class="item"><div><strong>${s.nome}</strong><small>${(s.aliases || []).join(", ") || "nessun alias"}</small></div><div>${euro(supplierSuspeso(s))}</div></div>`).join("") || `<div class="muted tiny">Nessun fornitore registrato.</div>`;
   $("dashboardBanchetti").innerHTML = state.bookings.slice(-5).reverse().map(b=>`<div class="item"><div><strong>${b.nome}</strong><small>${b.data} · ${b.tipo}</small></div><div>${b.adulti}+${b.bambini}</div></div>`).join("") || `<div class="muted tiny">Nessuna prenotazione registrata.</div>`;
 }
-function renderDailyTable(){
-  $("giorniTable").innerHTML = state.dailyRecords.map(r=>{
-    const totals = getDailyTotals(r);
-    const alerts = validateDaily(r);
-    return `<tr>
-      <td><button class="btn ghost day-edit-btn" data-day-date="${r.data}" style="padding:6px 10px;">${r.data}</button></td>
-      <td>${totals.totalCoperti}</td>
-      <td>${euro(totals.totalIncasso)}</td>
-      <td>${r.pizze}</td>
-      <td>${r.menu} / ${r.supplementi}</td>
-      <td style="display:flex;gap:8px;flex-wrap:wrap;">
-        ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}" style="padding:6px 10px;color:#fca5a5;">Alert</button>` : '<span class="ok">OK</span>'}
-        <button class="btn ghost day-delete-btn" data-day-date="${r.data}" style="padding:6px 10px;">Cancella</button>
-      </td>
-    </tr>`;
-  }).join("");
-  document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", () => openAlertModalByDate(btn.dataset.alertDate)));
-  document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", () => loadDailyByDate(btn.dataset.dayDate)));
-  document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteDailyByDate(btn.dataset.dayDate)));
-}
+function renderDailyTable(){ $("giorniTable").innerHTML = state.dailyRecords.map(r=>{ const totals = getDailyTotals(r); const alerts = validateDaily(r); return `<tr><td>${r.data}</td><td>${totals.totalCoperti}</td><td>${euro(totals.totalIncasso)}</td><td>${r.pizze}</td><td>${r.menu} / ${r.supplementi}</td><td>${alerts.length ? '<span class="bad">Alert</span>' : '<span class="ok">OK</span>'}</td></tr>`; }).join(""); }
 function renderCash(){ $("cashInitContanti").value = state.cashInitial.contanti || 0; $("cashInitPos").value = state.cashInitial.pos || 0; $("cashInitAllianz").value = state.cashInitial.allianz || 0; $("cashInitPostepay").value = state.cashInitial.postepay || 0; $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr><td>${m.data}</td><td>${m.cassa}</td><td>${m.tipo}</td><td>${m.descrizione || ""}</td><td>${euro(m.importo)}</td></tr>`).join(""); }
 function renderSuppliers(){ $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${s.nome}</option>`).join(""); $("fornitoriTable").innerHTML = state.suppliers.map(s=>{ const sosp = supplierSuspeso(s); const last = state.supplierMovements.filter(m=>m.supplier_id === s.id).slice(-1)[0]; return `<tr><td>${s.nome}</td><td>${(s.aliases || []).join(", ") || "—"}</td><td>${euro(sosp)}</td><td>${last ? `${last.data} · ${last.tipo} ${euro(last.importo)}` : "—"}</td><td>${sosp > 0 ? '<span class="warn">Aperto</span>' : '<span class="ok">Chiuso</span>'}</td></tr>`; }).join(""); }
 function renderEmployees(){ $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${e.nome}</option>`).join(""); $("dipendentiTable").innerHTML = state.employees.map(e=>{ const pagato = employeePaid(e); const residuo = n(e.dovuto_mensile) - pagato; return `<tr><td>${e.nome}</td><td>${e.ruolo || "—"}</td><td>${euro(e.dovuto_mensile)}</td><td>${euro(pagato)}</td><td>${residuo > 0 ? `<span class="warn">${euro(residuo)}</span>` : `<span class="ok">${euro(residuo)}</span>`}</td></tr>`; }).join(""); }
-function renderBookings(){
-  $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr>
-    <td>${b.data}</td>
-    <td>${b.nome}</td>
-    <td>${b.adulti}+${b.bambini}</td>
-    <td>${b.tipo}</td>
-    <td>${euro(b.importo)}</td>
-    <td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td>
-    <td style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button class="btn ghost booking-edit-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Modifica</button>
-      <button class="btn ghost booking-delete-btn" data-booking-id="${b.id}" style="padding:6px 10px;">Cancella</button>
-    </td>
-  </tr>`).join("");
-  document.querySelectorAll(".booking-edit-btn").forEach(btn => btn.addEventListener("click", () => editBookingById(btn.dataset.bookingId)));
-  document.querySelectorAll(".booking-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteBookingById(btn.dataset.bookingId)));
+function renderBookings(){ $("banchettiTable").innerHTML = state.bookings.map(b=>`<tr><td>${b.data}</td><td>${b.nome}</td><td>${b.adulti}+${b.bambini}</td><td>${b.tipo}</td><td>${euro(b.importo)}</td><td>${[b.ora, b.note].filter(Boolean).join(" · ") || "—"}</td></tr>`).join(""); }
+function runMonthlyReport(){ const month = String($("reportMonth").value).padStart(2,"0"); const year = String($("reportYear").value); const records = state.dailyRecords.filter(r => r.data.startsWith(`${year}-${month}`)); let copPranzo=0, copCena=0, copBanchetti=0, incasso=0, asporto=0, bancone=0, pizze=0; records.forEach(r=>{ copPranzo += n(r.pranzo.coperti); copCena += n(r.cena.coperti); copBanchetti += n(r.banchetti.coperti); incasso += getDailyTotals(r).totalIncasso; asporto += n(r.pranzo.asporto)+n(r.cena.asporto)+n(r.banchetti.asporto); bancone += n(r.bancone); pizze += n(r.pizze); }); $("rCopPranzo").textContent = copPranzo; $("rCopCena").textContent = copCena; $("rCopBanchetti").textContent = copBanchetti; $("rIncasso").textContent = euro(incasso); $("reportSummary").innerHTML = [`<div class="item"><div><strong>Totale coperti complessivi</strong><small>pranzo + cena + banchetti</small></div><div>${copPranzo + copCena + copBanchetti}</div></div>`,`<div class="item"><div><strong>Asporto totale</strong><small>somma delle tre colonne</small></div><div>${euro(asporto)}</div></div>`,`<div class="item"><div><strong>Bancone totale</strong><small>incasso registrato a bancone</small></div><div>${euro(bancone)}</div></div>`,`<div class="item"><div><strong>Pizze totali</strong><small>somma delle giornate del mese</small></div><div>${pizze}</div></div>`,`<div class="item"><div><strong>Giornate presenti</strong><small>schede giornaliere salvate nel mese</small></div><div>${records.length}</div></div>`].join(""); }
+function renderAll(){ renderDashboard(); renderDailyTable(); renderCash(); renderSuppliers(); renderEmployees(); renderBookings(); runMonthlyReport(); }
+
+function bindEvents(){
+  document.querySelectorAll(".nav-btn[data-section]").forEach(btn => btn.addEventListener("click", () => navigate(btn.dataset.section)));
+  document.querySelectorAll(".tab-btn").forEach(btn => btn.addEventListener("click", () => setAuthTab(btn.dataset.authTab)));
+  $("loginBtn").addEventListener("click", login);
+  $("registerBtn").addEventListener("click", register);
+  $("logoutBtn").addEventListener("click", logout);
+  $("selectorLogoutBtn").addEventListener("click", logout);
+  $("enterCompanyBtn").addEventListener("click", async () => { if(!selectedCompanyId){ alert("Seleziona una ditta."); return; } await openCompany(selectedCompanyId); });
+  $("switchCompanyBtn").addEventListener("click", async () => { if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
+  $("saveDayBtn").addEventListener("click", saveDaily);
+  $("saveCashInitBtn").addEventListener("click", saveCashInitial);
+  $("saveMovBtn").addEventListener("click", saveCashMovement);
+  $("saveFornBtn").addEventListener("click", saveSupplier);
+  $("saveFornMovBtn").addEventListener("click", saveSupplierMovement);
+  $("saveDipBtn").addEventListener("click", saveEmployee);
+  $("saveDipMovBtn").addEventListener("click", saveEmployeeMovement);
+  $("saveBanBtn").addEventListener("click", saveBooking);
+  $("runReportBtn").addEventListener("click", runMonthlyReport);
+  $("refreshBtn").addEventListener("click", () => refreshData("Dati aggiornati dal cloud."));
+  $("backupBtn").addEventListener("click", exportBackup);
+  $("importFile").addEventListener("change", (e) => e.target.files[0] && importBackup(e.target.files[0]));
 }
 async function main(){
-  bindEvents();
-  seedFields();
-  const ok = await initSupabase();
-  if(!ok) return;
-  supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
-  if(state.session) await bootstrapAfterAuth();
-  else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  try{
+    bindEvents();
+    seedFields();
+    const ok = await initSupabase();
+    if(!ok) return;
+    supabase.auth.onAuthStateChange(async (_event, session) => { state.session = session; });
+    if(state.session) await bootstrapAfterAuth();
+    else { hideAllViews(); $("authView").classList.remove("hidden"); }
+  }catch(err){
+    console.error("Errore main:", err);
+    hideAllViews();
+    $("authView").classList.remove("hidden");
+    showAuthMessage("Errore avvio app: " + (err?.message || err), true);
+  }
 }
 main();
