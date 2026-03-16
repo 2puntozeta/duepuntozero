@@ -1,9 +1,18 @@
+
 create extension if not exists pgcrypto;
+
+create table if not exists public.app_config (
+  id boolean primary key default true,
+  supervisor_email text not null,
+  updated_at timestamptz not null default now(),
+  constraint single_row check (id = true)
+);
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text,
   full_name text default '',
+  phone text default '',
   global_role text not null default 'user' check (global_role in ('user','supervisor')),
   created_at timestamptz not null default now()
 );
@@ -12,6 +21,7 @@ create table if not exists public.companies (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   vat_number text default '',
+  phone text default '',
   created_at timestamptz not null default now()
 );
 
@@ -114,10 +124,49 @@ returns trigger
 language plpgsql
 security definer
 as $$
+declare
+  _company_id uuid;
+  _supervisor_id uuid;
+  _company_name text;
+  _vat text;
+  _phone text;
+  _supervisor_email text;
 begin
-  insert into public.profiles (id, email)
-  values (new.id, new.email)
+  _company_name := coalesce(new.raw_user_meta_data->>'company_name', '');
+  _vat := coalesce(new.raw_user_meta_data->>'vat_number', '');
+  _phone := coalesce(new.raw_user_meta_data->>'phone', '');
+
+  insert into public.profiles (id, email, phone)
+  values (new.id, new.email, _phone)
   on conflict (id) do nothing;
+
+  if _company_name <> '' then
+    insert into public.companies (name, vat_number, phone)
+    values (_company_name, _vat, _phone)
+    returning id into _company_id;
+
+    insert into public.company_users (user_id, company_id, role)
+    values (new.id, _company_id, 'owner')
+    on conflict (user_id, company_id) do nothing;
+
+    select supervisor_email into _supervisor_email
+    from public.app_config
+    where id = true;
+
+    if _supervisor_email is not null then
+      select id into _supervisor_id
+      from public.profiles
+      where lower(email) = lower(_supervisor_email)
+      limit 1;
+
+      if _supervisor_id is not null then
+        insert into public.company_users (user_id, company_id, role)
+        values (_supervisor_id, _company_id, 'supervisor')
+        on conflict (user_id, company_id) do nothing;
+      end if;
+    end if;
+  end if;
+
   return new;
 end;
 $$;
@@ -154,6 +203,7 @@ as $$
   );
 $$;
 
+alter table public.app_config enable row level security;
 alter table public.profiles enable row level security;
 alter table public.companies enable row level security;
 alter table public.company_users enable row level security;
@@ -166,14 +216,23 @@ alter table public.employees enable row level security;
 alter table public.employee_movements enable row level security;
 alter table public.bookings enable row level security;
 
+drop policy if exists p_app_config_supervisor on public.app_config;
+create policy p_app_config_supervisor on public.app_config
+for select using (
+  exists (select 1 from public.profiles p where p.id = auth.uid() and p.global_role = 'supervisor')
+);
+
 drop policy if exists p_profiles_self on public.profiles;
-create policy p_profiles_self on public.profiles for select using (auth.uid() = id);
+create policy p_profiles_self on public.profiles
+for select using (auth.uid() = id);
 
 drop policy if exists p_companies_select on public.companies;
-create policy p_companies_select on public.companies for select using (public.is_member_of_company(id));
+create policy p_companies_select on public.companies
+for select using (public.is_member_of_company(id));
 
 drop policy if exists p_company_users_select_self on public.company_users;
-create policy p_company_users_select_self on public.company_users for select using (user_id = auth.uid());
+create policy p_company_users_select_self on public.company_users
+for select using (user_id = auth.uid());
 
 drop policy if exists p_daily_records_all on public.daily_records;
 create policy p_daily_records_all on public.daily_records
