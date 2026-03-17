@@ -435,27 +435,47 @@ async function deleteCompanyAdmin(companyId) {
   const company = state.companiesAdmin.find(c => c.id === companyId);
   if (!company) return;
 
-  const msg = `Vuoi davvero eliminare TOTALMENTE la ditta "${company.name}"?
-
-Verranno eliminati anche dati, collegamenti e account Auth collegati se non usati da altre ditte.`;
+  const msg = Vuoi davvero eliminare TOTALMENTE la ditta "${company.name}"?\n\nVerranno eliminati anche dati, collegamenti e account Auth collegati se non usati da altre ditte.;
   if (!confirm(msg)) return;
 
-  const { data, error } = await supabase.functions.invoke("delete-company-total", {
-    body: { companyId }
-  });
+  try {
+    const { data, error } = await supabase.functions.invoke("delete-company-total", {
+      body: { companyId }
+    });
 
-  if (error) return showGlobalMessage(error.message || "Errore eliminazione totale", "error");
-  if (data?.error) return showGlobalMessage(data.error, "error");
+    if (error) {
+      let details = error.message || "Errore edge function";
+      try {
+        if (typeof error.context?.json === "function") {
+          const payload = await error.context.json();
+          details = payload?.error || JSON.stringify(payload);
+        } else if (typeof error.context?.text === "function") {
+          details = await error.context.text();
+        }
+      } catch (_) {}
+      showGlobalMessage(details, "error");
+      console.error("delete-company-total error:", error);
+      return;
+    }
 
-  if (state.activeCompany?.id === companyId) {
-    state.activeCompany = null;
-    selectedCompanyId = null;
+    if (data?.error) {
+      showGlobalMessage(data.error, "error");
+      return;
+    }
+
+    if (state.activeCompany?.id === companyId) {
+      state.activeCompany = null;
+      selectedCompanyId = null;
+    }
+
+    await refreshCompaniesAdmin();
+    renderCompanySelector();
+    renderCompaniesAdmin();
+    showGlobalMessage("Ditta eliminata totalmente.");
+  } catch (err) {
+    console.error("delete-company-total crash:", err);
+    showGlobalMessage(err?.message || String(err), "error");
   }
-
-  await refreshCompaniesAdmin();
-  renderCompanySelector();
-  renderCompaniesAdmin();
-  showGlobalMessage("Ditta eliminata totalmente.");
 }
 
 function renderCompaniesAdmin() {
