@@ -435,7 +435,9 @@ async function deleteCompanyAdmin(companyId) {
   const company = state.companiesAdmin.find(c => c.id === companyId);
   if (!company) return;
 
-  const msg = Vuoi davvero eliminare TOTALMENTE la ditta "${company.name}"?\n\nVerranno eliminati anche dati, collegamenti e account Auth collegati se non usati da altre ditte.;
+  const msg = `Vuoi davvero eliminare TOTALMENTE la ditta "${company.name}"?
+
+Verranno eliminati anche dati, collegamenti e account Auth collegati se non usati da altre ditte.`;
   if (!confirm(msg)) return;
 
   try {
@@ -453,8 +455,8 @@ async function deleteCompanyAdmin(companyId) {
           details = await error.context.text();
         }
       } catch (_) {}
-      showGlobalMessage(details, "error");
       console.error("delete-company-total error:", error);
+      showGlobalMessage(details, "error");
       return;
     }
 
