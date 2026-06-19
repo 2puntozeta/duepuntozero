@@ -22,7 +22,7 @@
         <div class="logo">G</div>
         <div>
           <h1>Gestionale Privato</h1>
-          <p class="muted">Versione stabile ricostruita da zero</p>
+          <p class="muted">Chiusura cassa e schede automatiche</p>
         </div>
       </div>
 
@@ -90,7 +90,7 @@
         <div class="logo">G</div>
         <div>
           <h2>Gestionale</h2>
-          <p class="muted small">stabile</p>
+          <p class="muted small">chiusura cassa</p>
         </div>
       </div>
 
@@ -206,9 +206,42 @@
             </div>
           </div>
 
+          <div class="card inner">
+            <div class="toolbar">
+              <div>
+                <h4>Chiusura cassa</h4>
+                <p class="muted small">Inserisci l’incasso totale della giornata diviso per cassa. Le casse principali sono Contanti e POS; le altre vengono prese dalla sezione Casse.</p>
+              </div>
+            </div>
+            <div id="dailyCashInputs" class="grid4"></div>
+          </div>
+
+          <div class="split">
+            <div class="card inner">
+              <div class="toolbar">
+                <div>
+                  <h4>Pagamenti fornitori del giorno</h4>
+                  <p class="muted small">Questi pagamenti aggiorneranno automaticamente la scheda del fornitore e scaleranno dalla cassa scelta.</p>
+                </div>
+                <button class="secondary" id="addDailySupplierPaymentBtn" type="button">+ Fornitore</button>
+              </div>
+              <div id="dailySupplierPayments" class="stack-list"></div>
+            </div>
+            <div class="card inner">
+              <div class="toolbar">
+                <div>
+                  <h4>Acconti / pagamenti dipendenti</h4>
+                  <p class="muted small">Questi movimenti finiranno automaticamente nella scheda del dipendente e scaleranno dalla cassa scelta.</p>
+                </div>
+                <button class="secondary" id="addDailyEmployeePaymentBtn" type="button">+ Dipendente</button>
+              </div>
+              <div id="dailyEmployeePayments" class="stack-list"></div>
+            </div>
+          </div>
+
           <div class="toolbar">
             <div id="giornalieraFeedback" class="muted"></div>
-            <button id="saveDayBtn">Salva giornata</button>
+            <button id="saveDayBtn">Salva giornata e aggiorna schede</button>
           </div>
         </div>
 
@@ -314,8 +347,25 @@
           <h3>Elenco fornitori</h3>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Fornitore</th><th>Alias</th><th>Sospeso attuale</th><th>Ultimo movimento</th><th>Stato</th><th>Azioni</th></tr></thead>
+              <thead><tr><th>Fornitore</th><th>Alias</th><th>Sospeso attuale</th><th>Ultimo movimento</th><th>Stato</th><th>Scheda</th><th>Azioni</th></tr></thead>
               <tbody id="fornitoriTable"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="supplierDetailCard" class="card hidden">
+          <div class="toolbar">
+            <div>
+              <h3 id="supplierDetailTitle">Scheda fornitore</h3>
+              <p id="supplierDetailSubtitle" class="muted small"></p>
+            </div>
+            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="supplierDetailMonth" type="month" /></div>
+          </div>
+          <div class="grid4" id="supplierDetailKpis"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <tbody id="supplierDetailTable"></tbody>
             </table>
           </div>
         </div>
@@ -354,10 +404,28 @@
 
         <div class="card">
           <h3>Elenco dipendenti</h3>
+          <p class="muted small">La tabella mostra il mese corrente. Apri la scheda per vedere il calendario completo e filtrare mese per mese.</p>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Nome</th><th>Ruolo</th><th>Dovuto</th><th>Pagato</th><th>Residuo</th><th>Azioni</th></tr></thead>
+              <thead><tr><th>Nome</th><th>Ruolo</th><th>Dovuto mese</th><th>Dato mese</th><th>Residuo mese</th><th>Scheda</th><th>Azioni</th></tr></thead>
               <tbody id="dipendentiTable"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="employeeDetailCard" class="card hidden">
+          <div class="toolbar">
+            <div>
+              <h3 id="employeeDetailTitle">Scheda dipendente</h3>
+              <p id="employeeDetailSubtitle" class="muted small"></p>
+            </div>
+            <div class="field" style="min-width:180px;"><label>Mese</label><input id="employeeDetailMonth" type="month" /></div>
+          </div>
+          <div class="grid4" id="employeeDetailKpis"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <tbody id="employeeDetailTable"></tbody>
             </table>
           </div>
         </div>
@@ -418,8 +486,18 @@
           <div class="grid3">
             <div class="field"><label>Mese</label><select id="reportMonth"></select></div>
             <div class="field"><label>Anno</label><select id="reportYear"></select></div>
-            <div class="field" style="justify-content:flex-end;display:flex;align-items:end;"><button id="runReportBtn">Genera report</button></div>
+            <div class="field" style="justify-content:flex-end;display:flex;align-items:end;"><button id="runReportBtn">Genera report mensile</button></div>
           </div>
+        </div>
+
+        <div class="card">
+          <h3>Report giorno / periodo</h3>
+          <div class="grid3">
+            <div class="field"><label>Da data</label><input id="reportFromDate" type="date" /></div>
+            <div class="field"><label>A data</label><input id="reportToDate" type="date" /></div>
+            <div class="field" style="justify-content:flex-end;display:flex;align-items:end;"><button id="runPeriodReportBtn">Genera report periodo</button></div>
+          </div>
+          <p class="muted small">Se metti solo una data ottieni il report giornaliero. Se lasci vuota una delle due date, il gestionale prende dall’inizio o fino all’ultimo dato disponibile.</p>
           <div class="grid4">
             <div class="card inner"><div class="muted small">Coperti pranzo</div><div class="metric-value small" id="rCopPranzo">0</div></div>
             <div class="card inner"><div class="muted small">Coperti cena</div><div class="metric-value small" id="rCopCena">0</div></div>
