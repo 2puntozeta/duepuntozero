@@ -221,7 +221,7 @@
               <div class="toolbar">
                 <div>
                   <h4>Pagamenti fornitori del giorno</h4>
-                  <p class="muted small">Questi pagamenti aggiorneranno automaticamente la scheda del fornitore e scaleranno dalla cassa scelta.</p>
+                  <p class="muted small">Questi pagamenti aggiorneranno automaticamente la scheda del fornitore e scaleranno dalla cassa scelta. La data/ora pagamento è facoltativa: se non la inserisci resta valida la data della scheda.</p>
                 </div>
                 <button class="secondary" id="addDailySupplierPaymentBtn" type="button">+ Fornitore</button>
               </div>
@@ -231,7 +231,7 @@
               <div class="toolbar">
                 <div>
                   <h4>Acconti / pagamenti dipendenti</h4>
-                  <p class="muted small">Questi movimenti finiranno automaticamente nella scheda del dipendente e scaleranno dalla cassa scelta.</p>
+                  <p class="muted small">Questi movimenti finiranno automaticamente nella scheda del dipendente e scaleranno dalla cassa scelta. La data/ora pagamento è facoltativa: se non la inserisci resta valida la data della scheda.</p>
                 </div>
                 <button class="secondary" id="addDailyEmployeePaymentBtn" type="button">+ Dipendente</button>
               </div>
@@ -250,7 +250,7 @@
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Data</th><th>Coperti</th><th>Incasso</th><th>Pizze</th><th>Menù/Supp.</th><th>Azioni</th></tr>
+                <tr><th>Data</th><th>Salvata il</th><th>Coperti</th><th>Incasso</th><th>Pizze</th><th>Menù/Supp.</th><th>Azioni</th></tr>
               </thead>
               <tbody id="giorniTable"></tbody>
             </table>
@@ -292,7 +292,8 @@
         <div class="card">
           <h3>Nuovo movimento di cassa</h3>
           <div class="grid4">
-            <div class="field"><label>Data</label><input id="movData" type="date" /></div>
+            <div class="field"><label>Data contabile</label><input id="movData" type="date" /></div>
+            <div class="field"><label>Data/ora operazione (facoltativa)</label><input id="movOperatedAt" type="datetime-local" /></div>
             <div class="field"><label>Cassa</label><select id="movCassa"></select></div>
             <div class="field"><label>Tipo</label><select id="movTipo"><option value="entrata">Entrata</option><option value="uscita">Uscita</option></select></div>
             <div class="field"><label>Importo</label><input id="movImporto" type="number" step="0.01" value="0" /></div>
@@ -305,7 +306,7 @@
           <h3>Movimenti registrati</h3>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data</th><th>Cassa</th><th>Tipo</th><th>Descrizione</th><th>Importo</th><th>Azioni</th></tr></thead>
+              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Cassa</th><th>Tipo</th><th>Descrizione</th><th>Importo</th><th>Azioni</th></tr></thead>
               <tbody id="movimentiTable"></tbody>
             </table>
           </div>
@@ -334,7 +335,8 @@
             <h3>Movimento fornitore</h3>
             <div class="grid4">
               <div class="field"><label>Fornitore</label><select id="fornMovNome"></select></div>
-              <div class="field"><label>Data</label><input id="fornMovData" type="date" /></div>
+              <div class="field"><label>Data contabile</label><input id="fornMovData" type="date" /></div>
+              <div class="field"><label>Data/ora reale (facoltativa)</label><input id="fornMovOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="fornMovTipo"><option value="fattura">Fattura / da pagare</option><option value="pagamento">Pagamento</option><option value="acconto">Acconto</option><option value="extra">Extra / altro da pagare</option></select></div>
               <div class="field"><label>Cassa</label><select id="fornMovCassa"></select></div>
               <div class="field"><label>Importo</label><input id="fornMovImporto" type="number" step="0.01" value="0" /></div>
@@ -366,7 +368,8 @@
           <div class="card inner">
             <h4 style="margin-top:0;">Aggiungi movimento da questa scheda</h4>
             <div class="grid4">
-              <div class="field"><label>Data</label><input id="supplierDetailData" type="date" /></div>
+              <div class="field"><label>Data contabile</label><input id="supplierDetailData" type="date" /></div>
+              <div class="field"><label>Data/ora reale (facoltativa)</label><input id="supplierDetailOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="supplierDetailTipo"><option value="fattura">Fattura / da pagare</option><option value="pagamento">Pagamento</option><option value="acconto">Acconto</option><option value="extra">Extra / altro da pagare</option></select></div>
               <div class="field"><label>Cassa</label><select id="supplierDetailCassa"></select></div>
               <div class="field"><label>Importo</label><input id="supplierDetailImporto" type="number" step="0.01" value="0" /></div>
@@ -376,7 +379,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
               <tbody id="supplierDetailTable"></tbody>
             </table>
           </div>
@@ -405,7 +408,8 @@
             <h3>Pagamento / extra</h3>
             <div class="grid4">
               <div class="field"><label>Dipendente</label><select id="dipMovNome"></select></div>
-              <div class="field"><label>Data</label><input id="dipMovData" type="date" /></div>
+              <div class="field"><label>Data contabile</label><input id="dipMovData" type="date" /></div>
+              <div class="field"><label>Data/ora reale (facoltativa)</label><input id="dipMovOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="dipMovTipo"><option value="pagamento">Pagamento</option><option value="extra">Extra</option><option value="acconto">Acconto</option></select></div>
               <div class="field"><label>Cassa</label><select id="dipMovCassa"></select></div>
               <div class="field"><label>Importo</label><input id="dipMovImporto" type="number" step="0.01" value="0" /></div>
@@ -438,7 +442,8 @@
           <div class="card inner">
             <h4 style="margin-top:0;">Aggiungi pagamento da questa scheda</h4>
             <div class="grid4">
-              <div class="field"><label>Data</label><input id="employeeDetailData" type="date" /></div>
+              <div class="field"><label>Data contabile</label><input id="employeeDetailData" type="date" /></div>
+              <div class="field"><label>Data/ora reale (facoltativa)</label><input id="employeeDetailOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="employeeDetailTipo"><option value="acconto">Acconto</option><option value="pagamento">Pagamento</option><option value="extra">Extra</option></select></div>
               <div class="field"><label>Cassa</label><select id="employeeDetailCassa"></select></div>
               <div class="field"><label>Importo</label><input id="employeeDetailImporto" type="number" step="0.01" value="0" /></div>
@@ -448,7 +453,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
               <tbody id="employeeDetailTable"></tbody>
             </table>
           </div>

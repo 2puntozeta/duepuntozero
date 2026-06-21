@@ -34,7 +34,44 @@ let selectedEmployeeDetailId = null;
 const $ = (id) => document.getElementById(id);
 const safeEl = (id) => document.getElementById(id);
 const n = (v) => Number(v || 0);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+function todayStr() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+function nowLocalDateTimeInput() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+function cleanDateTimeLocal(v) {
+  return String(v || "").trim() || null;
+}
+function dateFromDateTimeOrDate(dateTime, dateStr) {
+  const dt = cleanDateTimeLocal(dateTime);
+  if (dt && /^\d{4}-\d{2}-\d{2}/.test(dt)) return dt.slice(0, 10);
+  return dateStr || todayStr();
+}
+function formatDateTime(v) {
+  if (!v) return "—";
+  const raw = String(v);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) {
+    return raw.replace("T", " ").slice(0, 16);
+  }
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) {
+    return d.toLocaleString("it-IT", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
+  }
+  return raw.replace("T", " ").slice(0, 16);
+}
+function formatOperationDateTime(row) {
+  if (row?.operated_at) return formatDateTime(row.operated_at);
+  if (row?.data) return formatDateTime(`${row.data}T00:00`);
+  return "—";
+}
+function formatSavedAt(row) {
+  return formatDateTime(row?.saved_at || row?.created_at || row?.payload?.saved_at || row?.savedAt || "");
+}
 const euro = (v) =>
   new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(Number(v || 0));
 const isSupervisor = () => state.profile?.global_role === "supervisor";
@@ -227,6 +264,7 @@ function addDailySupplierPaymentRow(row = {}) {
     <div class="field"><label>Fornitore</label><select data-field="supplier_id">${supplierSelectOptions(row.supplier_id || "")}</select></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
+    <div class="field"><label>Data/ora pagamento</label><input data-field="operated_at" type="datetime-local" value="${escapeHtml(row.operated_at || "")}" /></div>
     <div class="field"><label>Nota</label><input data-field="nota" value="${escapeHtml(row.nota || "")}" placeholder="es. pagamento merce" /></div>
     <button class="secondary daily-row-remove" type="button">Rimuovi</button>`;
   div.querySelector(".daily-row-remove")?.addEventListener("click", () => div.remove());
@@ -242,6 +280,7 @@ function addDailyEmployeePaymentRow(row = {}) {
     <div class="field"><label>Tipo</label><select data-field="tipo"><option value="acconto" ${(row.tipo || "acconto") === "acconto" ? "selected" : ""}>Acconto</option><option value="pagamento" ${row.tipo === "pagamento" ? "selected" : ""}>Pagamento</option><option value="extra" ${row.tipo === "extra" ? "selected" : ""}>Extra</option></select></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
+    <div class="field"><label>Data/ora pagamento</label><input data-field="operated_at" type="datetime-local" value="${escapeHtml(row.operated_at || "")}" /></div>
     <div class="field"><label>Nota</label><input data-field="nota" value="${escapeHtml(row.nota || "")}" placeholder="es. acconto" /></div>
     <button class="secondary daily-row-remove" type="button">Rimuovi</button>`;
   div.querySelector(".daily-row-remove")?.addEventListener("click", () => div.remove());
@@ -264,6 +303,7 @@ function collectDailySupplierPayments() {
     supplier_id: row.querySelector('[data-field="supplier_id"]')?.value || "",
     cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
     importo: n(row.querySelector('[data-field="importo"]')?.value),
+    operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
     nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
   })).filter(row => row.supplier_id && row.importo > 0);
 }
@@ -273,6 +313,7 @@ function collectDailyEmployeePayments() {
     tipo: row.querySelector('[data-field="tipo"]')?.value || "acconto",
     cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
     importo: n(row.querySelector('[data-field="importo"]')?.value),
+    operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
     nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
   })).filter(row => row.employee_id && row.importo > 0);
 }
@@ -687,7 +728,7 @@ async function loadCompanyData() {
     fetchCompanyTable("employee_movements", "data", true),
     fetchCompanyTable("bookings", "data", true),
   ]);
-  state.dailyRecords = daily_records.map(r => r.payload);
+  state.dailyRecords = daily_records.map(r => ({ ...(r.payload || {}), saved_at: r.saved_at || r.created_at || r.payload?.saved_at || null }));
   state.cashMovements = cash_movements;
   state.customCashes = custom_cash_state || [];
   state.suppliers = suppliers;
@@ -747,6 +788,7 @@ function startCashMovementEdit(movement) {
   if (safeEl("movCassa")) $("movCassa").value = movement.cassa || "contanti";
   if (safeEl("movTipo")) $("movTipo").value = movement.tipo || "entrata";
   if (safeEl("movImporto")) $("movImporto").value = movement.importo ?? 0;
+  if (safeEl("movOperatedAt")) $("movOperatedAt").value = movement.operated_at ? String(movement.operated_at).slice(0,16) : "";
   if (safeEl("movDescrizione")) $("movDescrizione").value = movement.descrizione || "";
   if (safeEl("saveMovBtn")) $("saveMovBtn").textContent = "Aggiorna movimento";
   navigate("casse");
@@ -758,6 +800,7 @@ function resetCashMovementForm() {
   if (safeEl("movCassa")) $("movCassa").value = "contanti";
   if (safeEl("movTipo")) $("movTipo").value = "entrata";
   if (safeEl("movImporto")) $("movImporto").value = 0;
+  if (safeEl("movOperatedAt")) $("movOperatedAt").value = "";
   if (safeEl("movDescrizione")) $("movDescrizione").value = "";
   if (safeEl("saveMovBtn")) $("saveMovBtn").textContent = "Aggiungi movimento";
 }
@@ -778,10 +821,12 @@ async function deleteCashMovementById(id) {
 async function saveCashMovement() {
   const payload = {
     company_id: state.activeCompany.id,
-    data: $("movData").value,
+    data: dateFromDateTimeOrDate(safeEl("movOperatedAt")?.value, $("movData").value),
     cassa: $("movCassa").value,
     tipo: $("movTipo").value,
     importo: n($("movImporto").value),
+    operated_at: cleanDateTimeLocal(safeEl("movOperatedAt")?.value),
+    saved_at: new Date().toISOString(),
     descrizione: $("movDescrizione").value.trim(),
   };
   if (!payload.data || !payload.descrizione || payload.importo <= 0) return showGlobalMessage("Compila data, descrizione e importo.", "error");
@@ -795,20 +840,22 @@ async function saveCashMovement() {
   resetCashMovementForm();
   await refreshData(wasEditing ? "Movimento di cassa aggiornato." : "Movimento di cassa salvato.");
 }
-async function createCashOutMovement(data, cassa, importo, descrizione) {
+async function createCashOutMovement(data, cassa, importo, descrizione, operatedAt = null) {
   const payload = {
     company_id: state.activeCompany.id,
     data,
     cassa: cassa || "contanti",
     tipo: "uscita",
     importo: n(importo),
+    operated_at: cleanDateTimeLocal(operatedAt),
+    saved_at: new Date().toISOString(),
     descrizione,
   };
   if (!payload.data || payload.importo <= 0) return;
   const { error } = await supabase.from("cash_movements").insert(payload);
   if (error) throw error;
 }
-async function insertSupplierMovement({ supplierId, data, tipo, importo, nota, cassa }) {
+async function insertSupplierMovement({ supplierId, data, tipo, importo, nota, cassa, operated_at }) {
   const supplier = state.suppliers.find(s => s.id === supplierId);
   const cleanNota = [nota?.trim() || "", isSupplierPaymentType(tipo) ? `cassa: ${cassa || "contanti"}` : ""].filter(Boolean).join(" · ");
   const payload = {
@@ -817,15 +864,17 @@ async function insertSupplierMovement({ supplierId, data, tipo, importo, nota, c
     data,
     tipo,
     importo: n(importo),
+    operated_at: cleanDateTimeLocal(operated_at),
+    saved_at: new Date().toISOString(),
     nota: cleanNota,
   };
   const { error } = await supabase.from("supplier_movements").insert(payload);
   if (error) throw error;
   if (isSupplierPaymentType(tipo)) {
-    await createCashOutMovement(data, cassa, importo, `Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${nota ? " · " + nota : ""}`);
+    await createCashOutMovement(data, cassa, importo, `Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${nota ? " · " + nota : ""}`, operated_at);
   }
 }
-async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, cassa }) {
+async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, cassa, operated_at }) {
   const employee = state.employees.find(e => e.id === employeeId);
   const cleanNota = [nota?.trim() || "", `cassa: ${cassa || "contanti"}`].filter(Boolean).join(" · ");
   const payload = {
@@ -834,11 +883,13 @@ async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, c
     data,
     tipo,
     importo: n(importo),
+    operated_at: cleanDateTimeLocal(operated_at),
+    saved_at: new Date().toISOString(),
     nota: cleanNota,
   };
   const { error } = await supabase.from("employee_movements").insert(payload);
   if (error) throw error;
-  await createCashOutMovement(data, cassa, importo, `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${nota ? " · " + nota : ""}`);
+  await createCashOutMovement(data, cassa, importo, `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${nota ? " · " + nota : ""}`, operated_at);
 }
 
 async function clearAutoLinkedMovementsForDate(dateStr) {
@@ -861,9 +912,11 @@ async function syncDailyLinkedMovements(rec) {
     const supplierMovements = supplierRows.map(p => ({
       company_id: state.activeCompany.id,
       supplier_id: p.supplier_id,
-      data: rec.data,
+      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
       tipo: "pagamento",
       importo: n(p.importo),
+      operated_at: cleanDateTimeLocal(p.operated_at),
+      saved_at: new Date().toISOString(),
       nota: `${prefix} ${p.cassa || "contanti"}${p.nota ? " · " + p.nota : ""}`,
     }));
     const { error } = await supabase.from("supplier_movements").insert(supplierMovements);
@@ -873,10 +926,12 @@ async function syncDailyLinkedMovements(rec) {
       const supplier = state.suppliers.find(s => s.id === p.supplier_id);
       return {
         company_id: state.activeCompany.id,
-        data: rec.data,
+        data: dateFromDateTimeOrDate(p.operated_at, rec.data),
         cassa: p.cassa || "contanti",
         tipo: "uscita",
         importo: n(p.importo),
+        operated_at: cleanDateTimeLocal(p.operated_at),
+        saved_at: new Date().toISOString(),
         descrizione: `${prefix} Pagamento fornitore ${supplier?.nome || ""}${p.nota ? " · " + p.nota : ""}`,
       };
     });
@@ -888,9 +943,11 @@ async function syncDailyLinkedMovements(rec) {
     const employeeMovements = employeeRows.map(p => ({
       company_id: state.activeCompany.id,
       employee_id: p.employee_id,
-      data: rec.data,
+      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
       tipo: p.tipo || "acconto",
       importo: n(p.importo),
+      operated_at: cleanDateTimeLocal(p.operated_at),
+      saved_at: new Date().toISOString(),
       nota: `${prefix} ${p.cassa || "contanti"}${p.nota ? " · " + p.nota : ""}`,
     }));
     const { error } = await supabase.from("employee_movements").insert(employeeMovements);
@@ -900,10 +957,12 @@ async function syncDailyLinkedMovements(rec) {
       const employee = state.employees.find(e => e.id === p.employee_id);
       return {
         company_id: state.activeCompany.id,
-        data: rec.data,
+        data: dateFromDateTimeOrDate(p.operated_at, rec.data),
         cassa: p.cassa || "contanti",
         tipo: "uscita",
         importo: n(p.importo),
+        operated_at: cleanDateTimeLocal(p.operated_at),
+        saved_at: new Date().toISOString(),
         descrizione: `${prefix} ${p.tipo || "acconto"} dipendente ${employee?.nome || ""}${p.nota ? " · " + p.nota : ""}`,
       };
     });
@@ -913,7 +972,9 @@ async function syncDailyLinkedMovements(rec) {
 }
 async function persistDailyRecord(rec) {
   try {
-    const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
+    const savedAt = new Date().toISOString();
+    rec.saved_at = savedAt;
+    const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
     if (error) throw error;
     await syncDailyLinkedMovements(rec);
     return true;
@@ -1018,7 +1079,8 @@ async function saveSupplierMovement() {
   const supplier = state.suppliers.find(s => s.nome === $("fornMovNome").value);
   const payload = {
     supplierId: supplier?.id,
-    data: $("fornMovData").value,
+    data: dateFromDateTimeOrDate(safeEl("fornMovOperatedAt")?.value, $("fornMovData").value),
+    operated_at: cleanDateTimeLocal(safeEl("fornMovOperatedAt")?.value),
     tipo: $("fornMovTipo").value,
     cassa: safeEl("fornMovCassa")?.value || "contanti",
     importo: n($("fornMovImporto").value),
@@ -1028,6 +1090,7 @@ async function saveSupplierMovement() {
   try {
     await insertSupplierMovement(payload);
     if (safeEl("fornMovImporto")) $("fornMovImporto").value = 0;
+    if (safeEl("fornMovOperatedAt")) $("fornMovOperatedAt").value = "";
     if (safeEl("fornMovNota")) $("fornMovNota").value = "";
     await refreshData("Movimento fornitore salvato e cassa aggiornata.");
   } catch (err) {
@@ -1038,7 +1101,8 @@ async function saveSupplierDetailMovement() {
   if (!selectedSupplierDetailId) return showGlobalMessage("Apri prima la scheda di un fornitore.", "error");
   const payload = {
     supplierId: selectedSupplierDetailId,
-    data: safeEl("supplierDetailData")?.value || todayStr(),
+    data: dateFromDateTimeOrDate(safeEl("supplierDetailOperatedAt")?.value, safeEl("supplierDetailData")?.value || todayStr()),
+    operated_at: cleanDateTimeLocal(safeEl("supplierDetailOperatedAt")?.value),
     tipo: safeEl("supplierDetailTipo")?.value || "pagamento",
     cassa: safeEl("supplierDetailCassa")?.value || "contanti",
     importo: n(safeEl("supplierDetailImporto")?.value),
@@ -1048,6 +1112,7 @@ async function saveSupplierDetailMovement() {
   try {
     await insertSupplierMovement(payload);
     if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = 0;
+    if (safeEl("supplierDetailOperatedAt")) $("supplierDetailOperatedAt").value = "";
     if (safeEl("supplierDetailNota")) $("supplierDetailNota").value = "";
     await refreshData("Movimento aggiunto nella scheda fornitore e cassa aggiornata.");
   } catch (err) {
@@ -1104,7 +1169,8 @@ async function saveEmployeeMovement() {
   const employee = state.employees.find(e => e.nome === $("dipMovNome").value);
   const payload = {
     employeeId: employee?.id,
-    data: $("dipMovData").value,
+    data: dateFromDateTimeOrDate(safeEl("dipMovOperatedAt")?.value, $("dipMovData").value),
+    operated_at: cleanDateTimeLocal(safeEl("dipMovOperatedAt")?.value),
     tipo: $("dipMovTipo").value,
     cassa: safeEl("dipMovCassa")?.value || "contanti",
     importo: n($("dipMovImporto").value),
@@ -1114,6 +1180,7 @@ async function saveEmployeeMovement() {
   try {
     await insertEmployeeMovement(payload);
     if (safeEl("dipMovImporto")) $("dipMovImporto").value = 0;
+    if (safeEl("dipMovOperatedAt")) $("dipMovOperatedAt").value = "";
     if (safeEl("dipMovNota")) $("dipMovNota").value = "";
     await refreshData("Movimento dipendente salvato e cassa aggiornata.");
   } catch (err) {
@@ -1124,7 +1191,8 @@ async function saveEmployeeDetailMovement() {
   if (!selectedEmployeeDetailId) return showGlobalMessage("Apri prima la scheda di un dipendente.", "error");
   const payload = {
     employeeId: selectedEmployeeDetailId,
-    data: safeEl("employeeDetailData")?.value || todayStr(),
+    data: dateFromDateTimeOrDate(safeEl("employeeDetailOperatedAt")?.value, safeEl("employeeDetailData")?.value || todayStr()),
+    operated_at: cleanDateTimeLocal(safeEl("employeeDetailOperatedAt")?.value),
     tipo: safeEl("employeeDetailTipo")?.value || "acconto",
     cassa: safeEl("employeeDetailCassa")?.value || "contanti",
     importo: n(safeEl("employeeDetailImporto")?.value),
@@ -1134,6 +1202,7 @@ async function saveEmployeeDetailMovement() {
   try {
     await insertEmployeeMovement(payload);
     if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = 0;
+    if (safeEl("employeeDetailOperatedAt")) $("employeeDetailOperatedAt").value = "";
     if (safeEl("employeeDetailNota")) $("employeeDetailNota").value = "";
     await refreshData("Movimento aggiunto nella scheda dipendente e cassa aggiornata.");
   } catch (err) {
@@ -1302,6 +1371,7 @@ function renderDailyTable() {
     const alerts = validateDaily(r);
     return `<tr>
       <td><button class="btn ghost day-edit-btn" data-day-date="${r.data}">${r.data}</button></td>
+      <td>${formatSavedAt(r)}</td>
       <td>${totals.totalCoperti}</td>
       <td>${euro(totals.totalIncasso)}</td>
       <td>${r.pizze}</td>
@@ -1328,6 +1398,8 @@ function renderCash() {
   if (safeEl("movimentiTable")) {
     $("movimentiTable").innerHTML = state.cashMovements.map(m=>`<tr>
       <td>${m.data}</td>
+      <td>${formatOperationDateTime(m)}</td>
+      <td>${formatSavedAt(m)}</td>
       <td>${m.cassa}</td>
       <td>${m.tipo}</td>
       <td>${m.descrizione || ""}</td>
@@ -1400,7 +1472,7 @@ function renderSupplierDetail() {
     `<div class="card inner"><div class="muted small">Pagamenti / acconti</div><div class="metric-value small">${euro(pagamenti)}</div></div>`,
     `<div class="card inner"><div class="muted small">Scoperto attuale</div><div class="metric-value small">${euro(supplierSuspeso(s))}</div></div>`,
   ].join("");
-  if (safeEl("supplierDetailTable")) $("supplierDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="4">Nessun movimento</td></tr>';
+  if (safeEl("supplierDetailTable")) $("supplierDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${formatOperationDateTime(m)}</td><td>${formatSavedAt(m)}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="6">Nessun movimento</td></tr>';
 }
 function renderEmployees() {
   if (safeEl("dipMovNome")) $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${escapeHtml(e.nome)}</option>`).join("");
@@ -1459,7 +1531,7 @@ function renderEmployeeDetail() {
     `<div class="card inner"><div class="muted small">Manca nel mese</div><div class="metric-value small">${euro(status.residuo)}</div></div>`,
     `<div class="card inner"><div class="muted small">Dato totale storico</div><div class="metric-value small">${euro(paidAll)}</div></div>`,
   ].join("");
-  if (safeEl("employeeDetailTable")) $("employeeDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="4">Nessun movimento</td></tr>';
+  if (safeEl("employeeDetailTable")) $("employeeDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${formatOperationDateTime(m)}</td><td>${formatSavedAt(m)}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="6">Nessun movimento</td></tr>';
 }
 function renderBookings() {
   const table = safeEl("banchettiTable");
