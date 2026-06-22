@@ -30,6 +30,8 @@ let editingBookingId = null;
 let editingCashMovementId = null;
 let selectedSupplierDetailId = null;
 let selectedEmployeeDetailId = null;
+let editingSupplierMovementId = null;
+let editingEmployeeMovementId = null;
 
 const $ = (id) => document.getElementById(id);
 const safeEl = (id) => document.getElementById(id);
@@ -72,6 +74,17 @@ function formatOperationDateTime(row) {
 function formatSavedAt(row) {
   return formatDateTime(row?.saved_at || row?.created_at || row?.payload?.saved_at || row?.savedAt || "");
 }
+function toDateTimeLocalInput(v) {
+  if (!v) return "";
+  const raw = String(v);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) return raw.slice(0, 16);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw.replace(" ", "T").slice(0, 16);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+function normalizeMoney(v) { return Math.round(n(v) * 100) / 100; }
+function roughlySameMoney(a, b) { return Math.abs(normalizeMoney(a) - normalizeMoney(b)) < 0.01; }
 const euro = (v) =>
   new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(Number(v || 0));
 const isSupervisor = () => state.profile?.global_role === "supervisor";
@@ -436,12 +449,114 @@ function employeeSelectOptions(selectedId = "") {
   const options = [`<option value="">Seleziona dipendente esistente</option>`].concat((state.employees || []).map(e => `<option value="${e.id}" ${e.id === selectedId ? "selected" : ""}>${escapeHtml(e.nome)}</option>`));
   return options.join("");
 }
+
+function extractCashFromNote(text, fallback = "contanti") {
+  const raw = String(text || "");
+  const m = raw.match(/cassa:\s*([^·\n\r]+)/i);
+  if (m && m[1]) return m[1].trim();
+  const daily = raw.match(/^\[scheda giornaliera\s+\d{4}-\d{2}-\d{2}\]\s*([^·\n\r]+)/i);
+  if (daily && daily[1]) return daily[1].trim();
+  return fallback;
+}
+function cleanMovementNoteForDaily(text) {
+  return String(text || "")
+    .replace(/^\[scheda giornaliera\s+\d{4}-\d{2}-\d{2}\]\s*/i, "")
+    .replace(/(^|·)\s*cassa:\s*[^·\n\r]+/gi, "")
+    .replace(/\s*·\s*$/g, "")
+    .trim();
+}
+function cleanMovementNoteForForm(text) {
+  let out = cleanMovementNoteForDaily(text);
+  const cash = normalizeSearchText(extractCashFromNote(text, ""));
+  if (cash) {
+    const parts = out.split("·").map(x => x.trim()).filter(Boolean);
+    if (parts.length && normalizeSearchText(parts[0]) === cash) parts.shift();
+    out = parts.join(" · ").trim();
+  }
+  return out;
+}
+function isDailyAutoMovement(row) {
+  return !!row?.data && isDailyAutoLinkedMovement(row, row.data);
+}
+function isDailyAutoLinkedMovement(row, dateStr) {
+  const marker = dailyAutoPrefix(dateStr);
+  return String(row?.nota || row?.descrizione || "").startsWith(marker);
+}
+function mergeDailyRowsBySource(baseRows = [], extraRows = []) {
+  const out = [];
+  const seen = new Set();
+  const keyOf = (r) => r.source_id ? `${r.source_kind || "mov"}:${r.source_id}` : [r.supplier_id || r.employee_id || r.new_supplier_name || r.new_employee_name || "", r.importo || 0, r.operated_at || "", r.nota || ""].join("|");
+  [...(baseRows || []), ...(extraRows || [])].forEach(r => {
+    const key = keyOf(r);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(r);
+  });
+  return out;
+}
+function supplierPaymentRowsFromMovements(dateStr) {
+  if (!dateStr) return [];
+  return (state.supplierMovements || [])
+    .filter(m => m.data === dateStr && isSupplierPaymentType(m.tipo) && !isDailyAutoLinkedMovement(m, dateStr))
+    .map(m => {
+      const supplier = state.suppliers.find(s => s.id === m.supplier_id);
+      return {
+        supplier_id: m.supplier_id || "",
+        supplier_search: supplier?.nome || "",
+        new_supplier_name: "",
+        cassa: extractCashFromNote(m.nota, "contanti"),
+        importo: n(m.importo),
+        operated_at: cleanDateTimeLocal(m.operated_at),
+        nota: cleanMovementNoteForDaily(m.nota),
+        source_kind: "supplier_movement",
+        source_id: m.id || "",
+      };
+    });
+}
+function employeePaymentRowsFromMovements(dateStr) {
+  if (!dateStr) return [];
+  return (state.employeeMovements || [])
+    .filter(m => m.data === dateStr && !isDailyAutoLinkedMovement(m, dateStr))
+    .map(m => {
+      return {
+        employee_id: m.employee_id || "",
+        new_employee_name: "",
+        tipo: m.tipo || "acconto",
+        cassa: extractCashFromNote(m.nota, "contanti"),
+        importo: n(m.importo),
+        operated_at: cleanDateTimeLocal(m.operated_at),
+        nota: cleanMovementNoteForDaily(m.nota),
+        source_kind: "employee_movement",
+        source_id: m.id || "",
+      };
+    });
+}
+function reloadDailyFormForSelectedDate() {
+  const dateStr = safeEl("gData")?.value || todayStr();
+  const rec = state.dailyRecords.find(r => r.data === dateStr) || {
+    data: dateStr,
+    note: "",
+    pranzo: emptyService(),
+    cena: emptyService(),
+    banchettiList: [emptyService({ nome:"Banchetto 1" })],
+    casse: {},
+    supplierPayments: [],
+    employeePayments: []
+  };
+  fillDailyForm(rec);
+  if (safeEl("giornalieraFeedback")) $("giornalieraFeedback").textContent = state.dailyRecords.some(r => r.data === dateStr) ? `Stai modificando la giornata ${dateStr}` : `Nuova giornata ${dateStr}`;
+}
+
 function addDailySupplierPaymentRow(row = {}) {
   const box = safeEl("dailySupplierPayments");
   if (!box) return;
   const div = document.createElement("div");
   div.className = "daily-row daily-supplier-row";
+  const sourceInfo = row.source_id ? `<div class="daily-payment-source muted small">Movimento già registrato nella scheda fornitore. In questa scheda viene mostrato per data contabile e non viene duplicato.</div>` : "";
   div.innerHTML = `
+    <input data-field="source_kind" type="hidden" value="${escapeHtml(row.source_kind || "")}" />
+    <input data-field="source_id" type="hidden" value="${escapeHtml(row.source_id || "")}" />
+    ${sourceInfo}
     <div class="field"><label>Cerca fornitore / alias</label><input data-field="supplier_search" list="suppliersDatalist" value="${escapeHtml(supplierInputValue(row))}" placeholder="nome o alias" autocomplete="off" /><input data-field="supplier_id" type="hidden" value="${escapeHtml(row.supplier_id || "")}" /></div>
     <div class="field"><label>Nuovo fornitore</label><input data-field="new_supplier_name" value="${escapeHtml(row.new_supplier_name || "")}" placeholder="scrivi qui se non esiste" /></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
@@ -457,7 +572,11 @@ function addDailyEmployeePaymentRow(row = {}) {
   if (!box) return;
   const div = document.createElement("div");
   div.className = "daily-row daily-employee-row";
+  const sourceInfo = row.source_id ? `<div class="daily-payment-source muted small">Movimento già registrato nella scheda dipendente. In questa scheda viene mostrato per data contabile e non viene duplicato.</div>` : "";
   div.innerHTML = `
+    <input data-field="source_kind" type="hidden" value="${escapeHtml(row.source_kind || "")}" />
+    <input data-field="source_id" type="hidden" value="${escapeHtml(row.source_id || "")}" />
+    ${sourceInfo}
     <div class="field"><label>Dipendente esistente</label><select data-field="employee_id">${employeeSelectOptions(row.employee_id || "")}</select></div>
     <div class="field"><label>Nuovo dipendente</label><input data-field="new_employee_name" value="${escapeHtml(row.new_employee_name || "")}" placeholder="scrivi qui se non esiste" /></div>
     <div class="field"><label>Tipo</label><select data-field="tipo"><option value="acconto" ${(row.tipo || "acconto") === "acconto" ? "selected" : ""}>Acconto</option><option value="pagamento" ${row.tipo === "pagamento" ? "selected" : ""}>Pagamento</option><option value="extra" ${row.tipo === "extra" ? "selected" : ""}>Extra</option></select></div>
@@ -486,13 +605,15 @@ function collectDailySupplierPayments() {
     const supplierSearch = row.querySelector('[data-field="supplier_search"]')?.value?.trim() || "";
     const supplier = findSupplierByNameOrAlias(supplierSearch);
     return {
-      supplier_id: supplier?.id || "",
+      supplier_id: supplier?.id || row.querySelector('[data-field="supplier_id"]')?.value || "",
       supplier_search: supplierSearch,
       new_supplier_name: row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "",
       cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
       importo: n(row.querySelector('[data-field="importo"]')?.value),
       operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
       nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
+      source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
+      source_id: row.querySelector('[data-field="source_id"]')?.value || "",
     };
   }).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
 }
@@ -505,6 +626,8 @@ function collectDailyEmployeePayments() {
     importo: n(row.querySelector('[data-field="importo"]')?.value),
     operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
     nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
+    source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
+    source_id: row.querySelector('[data-field="source_id"]')?.value || "",
   })).filter(row => (row.employee_id || row.new_employee_name) && row.importo > 0);
 }
 function collectLegacyDailyFromFormOnly() {
@@ -590,8 +713,10 @@ function fillDailyForm(rec) {
   fillService("cena", rec.cena || {}, "cena");
   renderBanchettiRows(getBanchettiList(rec));
   renderDailyCashInputs(rec);
-  renderDailySupplierPayments(rec.supplierPayments || []);
-  renderDailyEmployeePayments(rec.employeePayments || []);
+  const supplierRows = mergeDailyRowsBySource(rec.supplierPayments || [], supplierPaymentRowsFromMovements(rec.data));
+  const employeeRows = mergeDailyRowsBySource(rec.employeePayments || [], employeePaymentRowsFromMovements(rec.data));
+  renderDailySupplierPayments(supplierRows);
+  renderDailyEmployeePayments(employeeRows);
   updateDailyCashAuto();
 }
 function collectDailyFromForm() {
@@ -688,6 +813,163 @@ function computeCashBreakdown() {
 function computeCashBalances() {
   const breakdown = computeCashBreakdown();
   return Object.fromEntries(Object.entries(breakdown).map(([name,row]) => [name, row.saldo]));
+}
+
+
+function parseActivityTime(v) {
+  const raw = v || "";
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) return d.getTime();
+  return 0;
+}
+function businessMovementCash(m) {
+  return extractCashFromNote(m?.nota || m?.descrizione || "", "contanti");
+}
+function activityAmountHtml(amount, type = "neutral") {
+  if (amount === null || amount === undefined || amount === "") return "";
+  const cls = type === "out" ? "bad" : type === "in" ? "ok" : "";
+  const sign = type === "out" ? "-" : type === "in" ? "+" : "";
+  return `<strong class="${cls}">${sign}${euro(amount)}</strong>`;
+}
+function buildLatestActivities(limit = 12) {
+  const rows = [];
+  (state.dailyRecords || []).forEach(r => {
+    const totals = getDailyTotals(r);
+    rows.push({
+      savedAt: r.saved_at || r.created_at || "",
+      data: r.data || "",
+      title: `Scheda giornaliera ${r.data || ""}`,
+      detail: `Incasso lordo ${euro(totals.totalIncasso)} · netto ${euro(totals.totalIncassoNetto)} · coperti ${totals.totalCoperti}`,
+      amount: totals.totalIncassoNetto,
+      amountType: "in",
+    });
+  });
+  (state.supplierMovements || []).forEach(m => {
+    const supplier = (state.suppliers || []).find(s => s.id === m.supplier_id);
+    const isPayment = isSupplierPaymentType(m.tipo);
+    rows.push({
+      savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
+      data: m.data || "",
+      title: `${isPayment ? "Pagamento" : "Movimento"} fornitore · ${supplier?.nome || "Fornitore"}`,
+      detail: `Data contabile ${m.data || "—"} · operazione ${formatOperationDateTime(m)} · cassa ${cashLabel(businessMovementCash(m))}${isDailyAutoMovement(m) ? " · da scheda giornaliera" : ""}`,
+      amount: n(m.importo),
+      amountType: isPayment ? "out" : "neutral",
+    });
+  });
+  (state.employeeMovements || []).forEach(m => {
+    const employee = (state.employees || []).find(e => e.id === m.employee_id);
+    rows.push({
+      savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
+      data: m.data || "",
+      title: `${typeLabel(m.tipo)} dipendente · ${employee?.nome || "Dipendente"}`,
+      detail: `Data contabile ${m.data || "—"} · operazione ${formatOperationDateTime(m)} · cassa ${cashLabel(businessMovementCash(m))}${isDailyAutoMovement(m) ? " · da scheda giornaliera" : ""}`,
+      amount: n(m.importo),
+      amountType: "out",
+    });
+  });
+  (state.cashMovements || [])
+    .filter(m => !isDailyAutoLinkedMovement(m, m.data))
+    .forEach(m => {
+      rows.push({
+        savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
+        data: m.data || "",
+        title: `${m.tipo === "entrata" ? "Entrata" : "Uscita"} cassa · ${cashLabel(m.cassa || "contanti")}`,
+        detail: `Data contabile ${m.data || "—"} · operazione ${formatOperationDateTime(m)} · ${m.descrizione || "movimento manuale"}`,
+        amount: n(m.importo),
+        amountType: m.tipo === "entrata" ? "in" : "out",
+      });
+    });
+  return rows
+    .filter(r => r.savedAt || r.data)
+    .sort((a,b) => (parseActivityTime(b.savedAt) || parseActivityTime(b.data)) - (parseActivityTime(a.savedAt) || parseActivityTime(a.data)))
+    .slice(0, limit);
+}
+function renderLatestActivity() {
+  const box = safeEl("latestActivityBox");
+  if (!box) return;
+  const rows = buildLatestActivities(12);
+  if (safeEl("latestActivityCount")) $("latestActivityCount").textContent = `${rows.length} ultime voci`;
+  box.innerHTML = rows.length ? rows.map(row => `
+    <div class="item activity-row">
+      <div>
+        <strong>${escapeHtml(row.title)}</strong>
+        <small>${escapeHtml(row.detail)}</small>
+        <small>Salvato/modificato il: ${formatDateTime(row.savedAt || row.data)}</small>
+      </div>
+      <div class="activity-amount">${activityAmountHtml(row.amount, row.amountType)}</div>
+    </div>`).join("") : `<div class="alert okline">Ancora nessun movimento registrato.</div>`;
+}
+function findMatchingCashOutMovementForBusiness(kind, movement) {
+  const name = kind === "supplier"
+    ? (state.suppliers || []).find(s => s.id === movement.supplier_id)?.nome || ""
+    : (state.employees || []).find(e => e.id === movement.employee_id)?.nome || "";
+  const cassa = businessMovementCash(movement);
+  const needleKind = kind === "supplier" ? "fornitore" : "dipendente";
+  return (state.cashMovements || []).some(c => {
+    if (c.tipo !== "uscita") return false;
+    if (String(c.data || "") !== String(movement.data || "")) return false;
+    if (!roughlySameMoney(c.importo, movement.importo)) return false;
+    if (normalizeSearchText(c.cassa || "contanti") !== normalizeSearchText(cassa || "contanti")) return false;
+    const descr = normalizeSearchText(c.descrizione || "");
+    if (isDailyAutoMovement(movement) && isDailyAutoLinkedMovement(c, movement.data)) return true;
+    if (descr.includes(needleKind)) return true;
+    if (name && descr.includes(normalizeSearchText(name))) return true;
+    return false;
+  });
+}
+function runAccountingChecks() {
+  const issues = [];
+  (state.dailyRecords || []).forEach(r => {
+    validateDaily(r).forEach(text => issues.push({ level: "bad", title: `Scheda ${r.data}`, text }));
+    const auto = autoCashFromRecord(r);
+    const casse = r.casse || {};
+    if (Object.prototype.hasOwnProperty.call(casse, "contanti") && !roughlySameMoney(casse.contanti, auto.contanti)) {
+      issues.push({ level: "bad", title: `Scheda ${r.data}`, text: `Contanti chiusura ${euro(casse.contanti)} diversi dalla somma servizi ${euro(auto.contanti)}.` });
+    }
+    if (Object.prototype.hasOwnProperty.call(casse, "pos") && !roughlySameMoney(casse.pos, auto.pos)) {
+      issues.push({ level: "bad", title: `Scheda ${r.data}`, text: `POS chiusura ${euro(casse.pos)} diverso dalla somma servizi ${euro(auto.pos)}.` });
+    }
+  });
+  (state.supplierMovements || []).filter(m => isSupplierPaymentType(m.tipo)).forEach(m => {
+    if (!findMatchingCashOutMovementForBusiness("supplier", m)) {
+      const supplier = (state.suppliers || []).find(s => s.id === m.supplier_id);
+      issues.push({ level: "bad", title: `Fornitore ${supplier?.nome || ""}`, text: `Pagamento ${euro(m.importo)} del ${m.data} non risulta collegato a un’uscita cassa.` });
+    }
+  });
+  (state.employeeMovements || []).forEach(m => {
+    if (!findMatchingCashOutMovementForBusiness("employee", m)) {
+      const employee = (state.employees || []).find(e => e.id === m.employee_id);
+      issues.push({ level: "bad", title: `Dipendente ${employee?.nome || ""}`, text: `Movimento ${euro(m.importo)} del ${m.data} non risulta collegato a un’uscita cassa.` });
+    }
+  });
+  Object.entries(computeCashBreakdown()).forEach(([name,row]) => {
+    if (row.saldo < -0.01) {
+      issues.push({ level: "warn", title: `Cassa ${cashLabel(name)}`, text: `Saldo previsto negativo: ${euro(row.saldo)}. Controlla entrate e uscite.` });
+    }
+  });
+  return issues;
+}
+function renderAccountingCheck() {
+  const box = safeEl("accountingCheckBox");
+  if (!box) return;
+  const issues = runAccountingChecks();
+  if (safeEl("lastVerificationAt")) $("lastVerificationAt").textContent = `Ultimo controllo: ${formatDateTime(new Date().toISOString())}`;
+  if (!issues.length) {
+    box.innerHTML = `<div class="alert okline">Tutto torna: entrate, uscite, schede giornaliere e movimenti collegati risultano coerenti.</div>`;
+    return;
+  }
+  box.innerHTML = issues.slice(0, 12).map(issue => `
+    <div class="item check-row ${issue.level === "warn" ? "check-warn" : "check-bad"}">
+      <div>
+        <strong>${escapeHtml(issue.title)}</strong>
+        <small>${escapeHtml(issue.text)}</small>
+      </div>
+      <div>${issue.level === "warn" ? "Attenzione" : "Errore"}</div>
+    </div>`).join("") + (issues.length > 12 ? `<div class="muted small" style="margin-top:8px;">Altri ${issues.length - 12} controlli da verificare.</div>` : "");
+}
+function renderLiveChecks() {
+  renderLatestActivity();
+  renderAccountingCheck();
 }
 function computeGlobalAlerts() {
   const alerts = [];
@@ -1083,7 +1365,7 @@ async function deleteCashMovementById(id) {
 async function saveCashMovement() {
   const payload = {
     company_id: state.activeCompany.id,
-    data: dateFromDateTimeOrDate(safeEl("movOperatedAt")?.value, $("movData").value),
+    data: safeEl("movData")?.value || dateFromDateTimeOrDate(safeEl("movOperatedAt")?.value, todayStr()),
     cassa: $("movCassa").value,
     tipo: $("movTipo").value,
     importo: n($("movImporto").value),
@@ -1202,25 +1484,45 @@ async function syncDailyLinkedMovements(rec) {
   await clearAutoLinkedMovementsForDate(rec.data);
 
   const supplierRows = [];
+  const supplierRowsToInsert = [];
   for (const p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name) && n(p.importo) > 0)) {
+    if (p.source_id) {
+      const supplier = state.suppliers.find(s => s.id === p.supplier_id) || findSupplierByNameOrAlias(p.supplier_search);
+      if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome });
+      continue;
+    }
     const supplier = await getOrCreateSupplierFromDaily(p);
-    if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome });
+    if (supplier) {
+      const row = { ...p, supplier_id: supplier.id, supplier_name: supplier.nome };
+      supplierRows.push(row);
+      supplierRowsToInsert.push(row);
+    }
   }
 
   const employeeRows = [];
+  const employeeRowsToInsert = [];
   for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name) && n(p.importo) > 0)) {
+    if (p.source_id) {
+      const employee = state.employees.find(e => e.id === p.employee_id);
+      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
+      continue;
+    }
     const employee = await getOrCreateEmployeeFromDaily(p);
-    if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
+    if (employee) {
+      const row = { ...p, employee_id: employee.id, employee_name: employee.nome };
+      employeeRows.push(row);
+      employeeRowsToInsert.push(row);
+    }
   }
 
   rec.supplierPayments = supplierRows;
   rec.employeePayments = employeeRows;
 
-  if (supplierRows.length) {
-    const supplierMovements = supplierRows.map(p => ({
+  if (supplierRowsToInsert.length) {
+    const supplierMovements = supplierRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
       supplier_id: p.supplier_id,
-      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      data: rec.data,
       tipo: "pagamento",
       importo: n(p.importo),
       operated_at: cleanDateTimeLocal(p.operated_at),
@@ -1230,9 +1532,9 @@ async function syncDailyLinkedMovements(rec) {
     const { error } = await supabase.from("supplier_movements").insert(supplierMovements);
     if (error) throw error;
 
-    const cashMovements = supplierRows.map(p => ({
+    const cashMovements = supplierRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
-      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      data: rec.data,
       cassa: p.cassa || "contanti",
       tipo: "uscita",
       importo: n(p.importo),
@@ -1244,11 +1546,11 @@ async function syncDailyLinkedMovements(rec) {
     if (cashResult.error) throw cashResult.error;
   }
 
-  if (employeeRows.length) {
-    const employeeMovements = employeeRows.map(p => ({
+  if (employeeRowsToInsert.length) {
+    const employeeMovements = employeeRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
       employee_id: p.employee_id,
-      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      data: rec.data,
       tipo: p.tipo || "acconto",
       importo: n(p.importo),
       operated_at: cleanDateTimeLocal(p.operated_at),
@@ -1258,9 +1560,9 @@ async function syncDailyLinkedMovements(rec) {
     const { error } = await supabase.from("employee_movements").insert(employeeMovements);
     if (error) throw error;
 
-    const cashMovements = employeeRows.map(p => ({
+    const cashMovements = employeeRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
-      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      data: rec.data,
       cassa: p.cassa || "contanti",
       tipo: "uscita",
       importo: n(p.importo),
@@ -1335,6 +1637,240 @@ function loadDailyByDate(dateStr) {
   window.scrollTo({ top:0, behavior:"smooth" });
 }
 
+
+function movementMatchesDailySupplierRow(row, movement) {
+  const cash = extractCashFromNote(movement.nota, row.cassa || "contanti");
+  const note = cleanMovementNoteForForm(movement.nota);
+  return String(row.supplier_id || "") === String(movement.supplier_id || "")
+    && roughlySameMoney(row.importo, movement.importo)
+    && String(row.operated_at || "") === String(cleanDateTimeLocal(movement.operated_at) || "")
+    && normalizeSearchText(row.cassa || "contanti") === normalizeSearchText(cash || "contanti")
+    && normalizeSearchText(row.nota || "") === normalizeSearchText(note || "");
+}
+function movementMatchesDailyEmployeeRow(row, movement) {
+  const cash = extractCashFromNote(movement.nota, row.cassa || "contanti");
+  const note = cleanMovementNoteForForm(movement.nota);
+  return String(row.employee_id || "") === String(movement.employee_id || "")
+    && roughlySameMoney(row.importo, movement.importo)
+    && String(row.operated_at || "") === String(cleanDateTimeLocal(movement.operated_at) || "")
+    && normalizeSearchText(row.cassa || "contanti") === normalizeSearchText(cash || "contanti")
+    && normalizeSearchText(row.nota || "") === normalizeSearchText(note || "")
+    && String(row.tipo || "acconto") === String(movement.tipo || "acconto");
+}
+function removeFirstMatchingDailyRow(list, matcher) {
+  let removed = false;
+  return (list || []).filter(row => {
+    if (!removed && matcher(row)) { removed = true; return false; }
+    return true;
+  });
+}
+function emptyDailyRecordForDate(dateStr) {
+  return {
+    data: dateStr,
+    note: "",
+    pranzo: emptyService(),
+    cena: emptyService(),
+    banchetti: emptyService({ nome:"Banchetti" }),
+    banchettiList: [emptyService({ nome:"Banchetto 1" })],
+    casse: { contanti:0, pos:0 },
+    supplierPayments: [],
+    employeePayments: []
+  };
+}
+function getDailyRecordForUpdate(dateStr) {
+  return JSON.parse(JSON.stringify(state.dailyRecords.find(r => r.data === dateStr) || emptyDailyRecordForDate(dateStr)));
+}
+async function upsertDailyRecordPayload(rec) {
+  const savedAt = rec.saved_at || new Date().toISOString();
+  rec.saved_at = savedAt;
+  const { error } = await supabase.from("daily_records").upsert({
+    company_id: state.activeCompany.id,
+    data: rec.data,
+    payload: rec,
+    saved_at: savedAt
+  }, { onConflict: "company_id,data" });
+  if (error) throw error;
+}
+async function syncDailyPayloadAfterMovementEdit(kind, oldMovement, newPayload, { keepInDaily }) {
+  if (!isDailyAutoMovement(oldMovement)) return;
+  const oldRec = getDailyRecordForUpdate(oldMovement.data);
+  if (kind === "supplier") {
+    oldRec.supplierPayments = removeFirstMatchingDailyRow(oldRec.supplierPayments || [], row => movementMatchesDailySupplierRow(row, oldMovement));
+  } else {
+    oldRec.employeePayments = removeFirstMatchingDailyRow(oldRec.employeePayments || [], row => movementMatchesDailyEmployeeRow(row, oldMovement));
+  }
+  await upsertDailyRecordPayload(oldRec);
+
+  if (!keepInDaily) return;
+  const newRec = oldMovement.data === newPayload.data ? oldRec : getDailyRecordForUpdate(newPayload.data);
+  if (kind === "supplier") {
+    const supplier = state.suppliers.find(s => s.id === newPayload.supplier_id);
+    newRec.supplierPayments = (newRec.supplierPayments || []).concat({
+      supplier_id: newPayload.supplier_id,
+      supplier_search: supplier?.nome || "",
+      new_supplier_name: "",
+      cassa: newPayload.cassa || "contanti",
+      importo: n(newPayload.importo),
+      operated_at: cleanDateTimeLocal(newPayload.operated_at),
+      nota: newPayload.nota || ""
+    });
+  } else {
+    newRec.employeePayments = (newRec.employeePayments || []).concat({
+      employee_id: newPayload.employee_id,
+      new_employee_name: "",
+      tipo: newPayload.tipo || "acconto",
+      cassa: newPayload.cassa || "contanti",
+      importo: n(newPayload.importo),
+      operated_at: cleanDateTimeLocal(newPayload.operated_at),
+      nota: newPayload.nota || ""
+    });
+  }
+  await upsertDailyRecordPayload(newRec);
+}
+async function deleteMatchingCashOutMovement(oldMovement, kind) {
+  const oldCash = extractCashFromNote(oldMovement.nota, "contanti");
+  let q = supabase.from("cash_movements")
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("data", oldMovement.data)
+    .eq("tipo", "uscita")
+    .eq("cassa", oldCash)
+    .eq("importo", n(oldMovement.importo));
+  if (isDailyAutoMovement(oldMovement)) {
+    q = q.like("descrizione", `${dailyAutoPrefix(oldMovement.data)}%`);
+  } else if (kind === "supplier") {
+    const supplier = state.suppliers.find(s => s.id === oldMovement.supplier_id);
+    if (supplier?.nome) q = q.ilike("descrizione", `%fornitore ${supplier.nome}%`);
+  } else {
+    const employee = state.employees.find(e => e.id === oldMovement.employee_id);
+    if (employee?.nome) q = q.ilike("descrizione", `%dipendente ${employee.nome}%`);
+  }
+  const { error } = await q;
+  if (error) throw error;
+}
+function buildSupplierMovementNoteForSave({ oldMovement, data, tipo, cassa, nota }) {
+  const cleanNota = String(nota || "").trim();
+  if (isDailyAutoMovement(oldMovement) && isSupplierPaymentType(tipo)) {
+    return `${dailyAutoPrefix(data)} ${cassa || "contanti"}${cleanNota ? " · " + cleanNota : ""}`;
+  }
+  return [cleanNota, isSupplierPaymentType(tipo) ? `cassa: ${cassa || "contanti"}` : ""].filter(Boolean).join(" · ");
+}
+function buildEmployeeMovementNoteForSave({ oldMovement, data, cassa, nota }) {
+  const cleanNota = String(nota || "").trim();
+  if (isDailyAutoMovement(oldMovement)) {
+    return `${dailyAutoPrefix(data)} ${cassa || "contanti"}${cleanNota ? " · " + cleanNota : ""}`;
+  }
+  return [cleanNota, `cassa: ${cassa || "contanti"}`].filter(Boolean).join(" · ");
+}
+async function updateSupplierMovementFromDetail() {
+  const old = state.supplierMovements.find(m => m.id === editingSupplierMovementId);
+  if (!old) return showGlobalMessage("Movimento fornitore non trovato.", "error");
+  const data = safeEl("supplierDetailData")?.value || dateFromDateTimeOrDate(safeEl("supplierDetailOperatedAt")?.value, todayStr());
+  const tipo = safeEl("supplierDetailTipo")?.value || "pagamento";
+  const cassa = safeEl("supplierDetailCassa")?.value || "contanti";
+  const importo = n(safeEl("supplierDetailImporto")?.value);
+  const operated_at = cleanDateTimeLocal(safeEl("supplierDetailOperatedAt")?.value);
+  const notaPulita = safeEl("supplierDetailNota")?.value?.trim() || "";
+  if (!data || importo <= 0) return showGlobalMessage("Controlla data e importo.", "error");
+
+  const keepInDaily = isSupplierPaymentType(tipo);
+  const nota = buildSupplierMovementNoteForSave({ oldMovement: old, data, tipo, cassa, nota: notaPulita });
+  const payload = { data, tipo, importo, operated_at, saved_at: new Date().toISOString(), nota };
+  const { error } = await supabase.from("supplier_movements").update(payload).eq("company_id", state.activeCompany.id).eq("id", old.id);
+  if (error) throw error;
+
+  if (isSupplierPaymentType(old.tipo)) await deleteMatchingCashOutMovement(old, "supplier");
+  if (isSupplierPaymentType(tipo)) {
+    const supplier = state.suppliers.find(s => s.id === old.supplier_id);
+    const desc = isDailyAutoMovement(old)
+      ? `${dailyAutoPrefix(data)} Pagamento fornitore ${supplier?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`
+      : `Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${notaPulita ? " · " + notaPulita : ""}`;
+    await createCashOutMovement(data, cassa, importo, desc, operated_at);
+  }
+  await syncDailyPayloadAfterMovementEdit("supplier", old, { ...payload, supplier_id: old.supplier_id, cassa, nota: notaPulita }, { keepInDaily });
+  editingSupplierMovementId = null;
+  await refreshData("Movimento fornitore modificato.");
+  resetSupplierDetailMovementForm(false);
+}
+async function updateEmployeeMovementFromDetail() {
+  const old = state.employeeMovements.find(m => m.id === editingEmployeeMovementId);
+  if (!old) return showGlobalMessage("Movimento dipendente non trovato.", "error");
+  const data = safeEl("employeeDetailData")?.value || dateFromDateTimeOrDate(safeEl("employeeDetailOperatedAt")?.value, todayStr());
+  const tipo = safeEl("employeeDetailTipo")?.value || "acconto";
+  const cassa = safeEl("employeeDetailCassa")?.value || "contanti";
+  const importo = n(safeEl("employeeDetailImporto")?.value);
+  const operated_at = cleanDateTimeLocal(safeEl("employeeDetailOperatedAt")?.value);
+  const notaPulita = safeEl("employeeDetailNota")?.value?.trim() || "";
+  if (!data || importo <= 0) return showGlobalMessage("Controlla data e importo.", "error");
+
+  const nota = buildEmployeeMovementNoteForSave({ oldMovement: old, data, cassa, nota: notaPulita });
+  const payload = { data, tipo, importo, operated_at, saved_at: new Date().toISOString(), nota };
+  const { error } = await supabase.from("employee_movements").update(payload).eq("company_id", state.activeCompany.id).eq("id", old.id);
+  if (error) throw error;
+
+  await deleteMatchingCashOutMovement(old, "employee");
+  const employee = state.employees.find(e => e.id === old.employee_id);
+  const desc = isDailyAutoMovement(old)
+    ? `${dailyAutoPrefix(data)} ${tipo || "acconto"} dipendente ${employee?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`
+    : `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`;
+  await createCashOutMovement(data, cassa, importo, desc, operated_at);
+  await syncDailyPayloadAfterMovementEdit("employee", old, { ...payload, employee_id: old.employee_id, cassa, nota: notaPulita }, { keepInDaily: true });
+  editingEmployeeMovementId = null;
+  await refreshData("Movimento dipendente modificato.");
+  resetEmployeeDetailMovementForm(false);
+}
+function resetSupplierDetailMovementForm(clearEditing = true) {
+  if (clearEditing) editingSupplierMovementId = null;
+  if (safeEl("supplierDetailData")) $("supplierDetailData").value = todayStr();
+  if (safeEl("supplierDetailOperatedAt")) $("supplierDetailOperatedAt").value = "";
+  if (safeEl("supplierDetailTipo")) $("supplierDetailTipo").value = "pagamento";
+  if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = 0;
+  if (safeEl("supplierDetailNota")) $("supplierDetailNota").value = "";
+  if (safeEl("saveSupplierDetailMovBtn")) $("saveSupplierDetailMovBtn").textContent = "Aggiungi movimento";
+  safeEl("cancelSupplierDetailEditBtn")?.classList.add("hidden");
+  fillCashSelect("supplierDetailCassa", "contanti");
+}
+function resetEmployeeDetailMovementForm(clearEditing = true) {
+  if (clearEditing) editingEmployeeMovementId = null;
+  if (safeEl("employeeDetailData")) $("employeeDetailData").value = todayStr();
+  if (safeEl("employeeDetailOperatedAt")) $("employeeDetailOperatedAt").value = "";
+  if (safeEl("employeeDetailTipo")) $("employeeDetailTipo").value = "acconto";
+  if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = 0;
+  if (safeEl("employeeDetailNota")) $("employeeDetailNota").value = "";
+  if (safeEl("saveEmployeeDetailMovBtn")) $("saveEmployeeDetailMovBtn").textContent = "Aggiungi movimento";
+  safeEl("cancelEmployeeDetailEditBtn")?.classList.add("hidden");
+  fillCashSelect("employeeDetailCassa", "contanti");
+}
+function startSupplierMovementEdit(id) {
+  const m = state.supplierMovements.find(x => x.id === id);
+  if (!m) return;
+  selectedSupplierDetailId = m.supplier_id;
+  editingSupplierMovementId = id;
+  if (safeEl("supplierDetailData")) $("supplierDetailData").value = m.data || todayStr();
+  if (safeEl("supplierDetailOperatedAt")) $("supplierDetailOperatedAt").value = toDateTimeLocalInput(m.operated_at || "");
+  if (safeEl("supplierDetailTipo")) $("supplierDetailTipo").value = m.tipo || "pagamento";
+  if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = n(m.importo);
+  if (safeEl("supplierDetailNota")) $("supplierDetailNota").value = cleanMovementNoteForForm(m.nota);
+  fillCashSelect("supplierDetailCassa", extractCashFromNote(m.nota, "contanti"));
+  if (safeEl("saveSupplierDetailMovBtn")) $("saveSupplierDetailMovBtn").textContent = "Salva modifica";
+  safeEl("cancelSupplierDetailEditBtn")?.classList.remove("hidden");
+  safeEl("supplierDetailCard")?.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+function startEmployeeMovementEdit(id) {
+  const m = state.employeeMovements.find(x => x.id === id);
+  if (!m) return;
+  selectedEmployeeDetailId = m.employee_id;
+  editingEmployeeMovementId = id;
+  if (safeEl("employeeDetailData")) $("employeeDetailData").value = m.data || todayStr();
+  if (safeEl("employeeDetailOperatedAt")) $("employeeDetailOperatedAt").value = toDateTimeLocalInput(m.operated_at || "");
+  if (safeEl("employeeDetailTipo")) $("employeeDetailTipo").value = m.tipo || "acconto";
+  if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = n(m.importo);
+  if (safeEl("employeeDetailNota")) $("employeeDetailNota").value = cleanMovementNoteForForm(m.nota);
+  fillCashSelect("employeeDetailCassa", extractCashFromNote(m.nota, "contanti"));
+  if (safeEl("saveEmployeeDetailMovBtn")) $("saveEmployeeDetailMovBtn").textContent = "Salva modifica";
+  safeEl("cancelEmployeeDetailEditBtn")?.classList.remove("hidden");
+  safeEl("employeeDetailCard")?.scrollIntoView({ behavior:"smooth", block:"start" });
+}
 function startSupplierEdit(supplier) {
   editingSupplierId = supplier.id;
   $("fornNome").value = supplier.nome || "";
@@ -1385,7 +1921,7 @@ async function saveSupplierMovement() {
   const supplier = findSupplierByNameOrAlias(supplierSearch);
   const payload = {
     supplierId: supplier?.id,
-    data: dateFromDateTimeOrDate(safeEl("fornMovOperatedAt")?.value, $("fornMovData").value),
+    data: safeEl("fornMovData")?.value || dateFromDateTimeOrDate(safeEl("fornMovOperatedAt")?.value, todayStr()),
     operated_at: cleanDateTimeLocal(safeEl("fornMovOperatedAt")?.value),
     tipo: $("fornMovTipo").value,
     cassa: safeEl("fornMovCassa")?.value || "contanti",
@@ -1404,10 +1940,14 @@ async function saveSupplierMovement() {
   }
 }
 async function saveSupplierDetailMovement() {
+  if (editingSupplierMovementId) {
+    try { await updateSupplierMovementFromDetail(); } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
+    return;
+  }
   if (!selectedSupplierDetailId) return showGlobalMessage("Apri prima la scheda di un fornitore.", "error");
   const payload = {
     supplierId: selectedSupplierDetailId,
-    data: dateFromDateTimeOrDate(safeEl("supplierDetailOperatedAt")?.value, safeEl("supplierDetailData")?.value || todayStr()),
+    data: safeEl("supplierDetailData")?.value || dateFromDateTimeOrDate(safeEl("supplierDetailOperatedAt")?.value, todayStr()),
     operated_at: cleanDateTimeLocal(safeEl("supplierDetailOperatedAt")?.value),
     tipo: safeEl("supplierDetailTipo")?.value || "pagamento",
     cassa: safeEl("supplierDetailCassa")?.value || "contanti",
@@ -1417,9 +1957,7 @@ async function saveSupplierDetailMovement() {
   if (!payload.data || payload.importo <= 0) return showGlobalMessage("Inserisci data e importo.", "error");
   try {
     await insertSupplierMovement(payload);
-    if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = 0;
-    if (safeEl("supplierDetailOperatedAt")) $("supplierDetailOperatedAt").value = "";
-    if (safeEl("supplierDetailNota")) $("supplierDetailNota").value = "";
+    resetSupplierDetailMovementForm();
     await refreshData("Movimento aggiunto nella scheda fornitore e cassa aggiornata.");
   } catch (err) {
     showGlobalMessage(err.message || String(err), "error");
@@ -1475,7 +2013,7 @@ async function saveEmployeeMovement() {
   const employee = state.employees.find(e => e.nome === $("dipMovNome").value);
   const payload = {
     employeeId: employee?.id,
-    data: dateFromDateTimeOrDate(safeEl("dipMovOperatedAt")?.value, $("dipMovData").value),
+    data: safeEl("dipMovData")?.value || dateFromDateTimeOrDate(safeEl("dipMovOperatedAt")?.value, todayStr()),
     operated_at: cleanDateTimeLocal(safeEl("dipMovOperatedAt")?.value),
     tipo: $("dipMovTipo").value,
     cassa: safeEl("dipMovCassa")?.value || "contanti",
@@ -1494,10 +2032,14 @@ async function saveEmployeeMovement() {
   }
 }
 async function saveEmployeeDetailMovement() {
+  if (editingEmployeeMovementId) {
+    try { await updateEmployeeMovementFromDetail(); } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
+    return;
+  }
   if (!selectedEmployeeDetailId) return showGlobalMessage("Apri prima la scheda di un dipendente.", "error");
   const payload = {
     employeeId: selectedEmployeeDetailId,
-    data: dateFromDateTimeOrDate(safeEl("employeeDetailOperatedAt")?.value, safeEl("employeeDetailData")?.value || todayStr()),
+    data: safeEl("employeeDetailData")?.value || dateFromDateTimeOrDate(safeEl("employeeDetailOperatedAt")?.value, todayStr()),
     operated_at: cleanDateTimeLocal(safeEl("employeeDetailOperatedAt")?.value),
     tipo: safeEl("employeeDetailTipo")?.value || "acconto",
     cassa: safeEl("employeeDetailCassa")?.value || "contanti",
@@ -1507,9 +2049,7 @@ async function saveEmployeeDetailMovement() {
   if (!payload.data || payload.importo <= 0) return showGlobalMessage("Inserisci data e importo.", "error");
   try {
     await insertEmployeeMovement(payload);
-    if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = 0;
-    if (safeEl("employeeDetailOperatedAt")) $("employeeDetailOperatedAt").value = "";
-    if (safeEl("employeeDetailNota")) $("employeeDetailNota").value = "";
+    resetEmployeeDetailMovementForm();
     await refreshData("Movimento aggiunto nella scheda dipendente e cassa aggiornata.");
   } catch (err) {
     showGlobalMessage(err.message || String(err), "error");
@@ -1673,6 +2213,7 @@ function renderDashboard() {
       </div>`;
     }).join("") || `<div class="alert">Nessuna cassa presente.</div>`;
   }
+  renderLiveChecks();
 }
 
 function renderDailyTable() {
@@ -1787,7 +2328,18 @@ function renderSupplierDetail() {
     `<div class="card inner"><div class="muted small">Pagamenti / acconti</div><div class="metric-value small">${euro(pagamenti)}</div></div>`,
     `<div class="card inner"><div class="muted small">Scoperto attuale</div><div class="metric-value small">${euro(supplierSuspeso(s))}</div></div>`,
   ].join("");
-  if (safeEl("supplierDetailTable")) $("supplierDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${formatOperationDateTime(m)}</td><td>${formatSavedAt(m)}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="6">Nessun movimento</td></tr>';
+  if (safeEl("supplierDetailTable")) {
+    $("supplierDetailTable").innerHTML = moves.map(m => `<tr>
+      <td>${m.data}</td>
+      <td>${formatOperationDateTime(m)}</td>
+      <td>${formatSavedAt(m)}</td>
+      <td>${typeLabel(m.tipo)}${isDailyAutoMovement(m) ? ' <span class="pill">scheda giornaliera</span>' : ''}</td>
+      <td>${euro(m.importo)}</td>
+      <td>${escapeHtml(cleanMovementNoteForForm(m.nota) || "")}</td>
+      <td><button class="btn ghost supplier-movement-edit-btn" data-movement-id="${m.id}">Modifica</button></td>
+    </tr>`).join("") || '<tr><td colspan="7">Nessun movimento</td></tr>';
+    document.querySelectorAll(".supplier-movement-edit-btn").forEach(btn => btn.addEventListener("click", () => startSupplierMovementEdit(btn.dataset.movementId)));
+  }
 }
 function renderEmployees() {
   if (safeEl("dipMovNome")) $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${escapeHtml(e.nome)}</option>`).join("");
@@ -1846,7 +2398,18 @@ function renderEmployeeDetail() {
     `<div class="card inner"><div class="muted small">Manca nel mese</div><div class="metric-value small">${euro(status.residuo)}</div></div>`,
     `<div class="card inner"><div class="muted small">Dato totale storico</div><div class="metric-value small">${euro(paidAll)}</div></div>`,
   ].join("");
-  if (safeEl("employeeDetailTable")) $("employeeDetailTable").innerHTML = moves.map(m => `<tr><td>${m.data}</td><td>${formatOperationDateTime(m)}</td><td>${formatSavedAt(m)}</td><td>${typeLabel(m.tipo)}</td><td>${euro(m.importo)}</td><td>${escapeHtml(m.nota || "")}</td></tr>`).join("") || '<tr><td colspan="6">Nessun movimento</td></tr>';
+  if (safeEl("employeeDetailTable")) {
+    $("employeeDetailTable").innerHTML = moves.map(m => `<tr>
+      <td>${m.data}</td>
+      <td>${formatOperationDateTime(m)}</td>
+      <td>${formatSavedAt(m)}</td>
+      <td>${typeLabel(m.tipo)}${isDailyAutoMovement(m) ? ' <span class="pill">scheda giornaliera</span>' : ''}</td>
+      <td>${euro(m.importo)}</td>
+      <td>${escapeHtml(cleanMovementNoteForForm(m.nota) || "")}</td>
+      <td><button class="btn ghost employee-movement-edit-btn" data-movement-id="${m.id}">Modifica</button></td>
+    </tr>`).join("") || '<tr><td colspan="7">Nessun movimento</td></tr>';
+    document.querySelectorAll(".employee-movement-edit-btn").forEach(btn => btn.addEventListener("click", () => startEmployeeMovementEdit(btn.dataset.movementId)));
+  }
 }
 function renderBookings() {
   const table = safeEl("banchettiTable");
@@ -1867,16 +2430,24 @@ function renderBookings() {
   document.querySelectorAll(".booking-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteBookingById(btn.dataset.bookingId)));
 }
 function reportDateRange(from, to) {
-  const allDates = state.dailyRecords.map(r => r.data).filter(Boolean).sort();
+  const allDates = [
+    ...state.dailyRecords.map(r => r.data),
+    ...state.supplierMovements.map(m => m.data),
+    ...state.employeeMovements.map(m => m.data),
+    ...state.cashMovements.map(m => m.data),
+  ].filter(Boolean).sort();
   const earliest = allDates[0] || "";
   const latest = allDates[allDates.length - 1] || "";
   return { from: from || earliest, to: to || latest };
+}
+function dateInRange(dateStr, range) {
+  return (!range.from || dateStr >= range.from) && (!range.to || dateStr <= range.to);
 }
 function recordsInRange(from, to) {
   const range = reportDateRange(from, to);
   return state.dailyRecords.filter(r => (!range.from || r.data >= range.from) && (!range.to || r.data <= range.to));
 }
-function renderReportFromRecords(records, label = "") {
+function renderReportFromRecords(records, label = "", rangeOverride = null) {
   const servizioTotali = {
     pranzo: emptyService(),
     cena: emptyService(),
@@ -1888,6 +2459,13 @@ function renderReportFromRecords(records, label = "") {
   const cashGrossTotals = {};
   const cashFees = {};
   cashNames().forEach(c => { cashTotals[c] = 0; cashGrossTotals[c] = 0; cashFees[c] = 0; });
+  const reportRange = rangeOverride || reportDateRange(records[0]?.data || "", records[records.length - 1]?.data || "");
+  const supplierOutRows = (state.supplierMovements || []).filter(m => isSupplierPaymentType(m.tipo) && dateInRange(m.data, reportRange));
+  const employeeOutRows = (state.employeeMovements || []).filter(m => dateInRange(m.data, reportRange));
+  const supplierOut = supplierOutRows.reduce((a,b)=>a+n(b.importo),0);
+  const employeeOut = employeeOutRows.reduce((a,b)=>a+n(b.importo),0);
+  const totalOut = supplierOut + employeeOut;
+
 
   function addToServiceBucket(bucket, service) {
     SERVICE_NUMBER_FIELDS.forEach(field => { bucket[field] += n(service?.[field]); servizioTotali.totale[field] += n(service?.[field]); });
@@ -1945,6 +2523,10 @@ function renderReportFromRecords(records, label = "") {
     `<div class="card inner"><strong>Cena €</strong><div>${euro(servizioCena)}</div></div>`,
     `<div class="card inner"><strong>Banchetti €</strong><div>${euro(servizioBanchetti)}</div></div>`,
     `<div class="card inner"><strong>Bancone totale</strong><div>${euro(bancone)}</div></div>`,
+    `<div class="card inner"><strong>Uscite fornitori</strong><div>${euro(supplierOut)}</div><small>${supplierOutRows.length} movimenti</small></div>`,
+    `<div class="card inner"><strong>Uscite dipendenti</strong><div>${euro(employeeOut)}</div><small>${employeeOutRows.length} movimenti</small></div>`,
+    `<div class="card inner"><strong>Uscite totali</strong><div>${euro(totalOut)}</div></div>`,
+    `<div class="card inner"><strong>Incasso netto - uscite</strong><div>${euro(incassoNetto - totalOut)}</div></div>`,
     ...metricCards,
     ...Object.entries(cashTotals).map(([name,total]) => {
       const extra = isPosCash(name) ? `<small>lordo ${euro(cashGrossTotals[name])} · commissioni ${euro(cashFees[name])}</small>` : "";
@@ -1955,19 +2537,21 @@ function renderReportFromRecords(records, label = "") {
 function runMonthlyReport() {
   const month = String($("reportMonth").value).padStart(2,"0");
   const year = String($("reportYear").value);
-  const records = state.dailyRecords.filter(r => r.data.startsWith(`${year}-${month}`));
-  renderReportFromRecords(records, `Report ${month}/${year}`);
+  const prefix = `${year}-${month}`;
+  const records = state.dailyRecords.filter(r => r.data.startsWith(prefix));
+  renderReportFromRecords(records, `Report ${month}/${year}`, { from: `${prefix}-01`, to: `${prefix}-31` });
 }
 function runPeriodReport() {
   const from = safeEl("reportFromDate")?.value || "";
   const to = safeEl("reportToDate")?.value || "";
   let records;
   let label;
-  if (from && !to) { records = recordsInRange(from, ""); label = `Dal ${from} all’ultimo dato`; }
-  else if (!from && to) { records = recordsInRange("", to); label = `Dall’inizio al ${to}`; }
-  else if (from && to) { records = recordsInRange(from, to); label = from === to ? `Giorno ${from}` : `${from} → ${to}`; }
-  else { records = recordsInRange("", ""); label = "Tutto l’archivio"; }
-  renderReportFromRecords(records, label);
+  let range;
+  if (from && !to) { range = reportDateRange(from, ""); records = recordsInRange(from, ""); label = `Dal ${from} all’ultimo dato`; }
+  else if (!from && to) { range = reportDateRange("", to); records = recordsInRange("", to); label = `Dall’inizio al ${to}`; }
+  else if (from && to) { range = reportDateRange(from, to); records = recordsInRange(from, to); label = from === to ? `Giorno ${from}` : `${from} → ${to}`; }
+  else { range = reportDateRange("", ""); records = recordsInRange("", ""); label = "Tutto l’archivio"; }
+  renderReportFromRecords(records, label, range);
 }
 function renderAll() {
   if (safeEl("navDitteBtn")) $("navDitteBtn").classList.toggle("hidden", !isSupervisor());
@@ -1995,6 +2579,7 @@ function bindEvents() {
   safeEl("enterCompanyBtn")?.addEventListener("click", async ()=>{ if(!selectedCompanyId) return alert("Seleziona una ditta."); await openCompany(selectedCompanyId); });
   safeEl("switchCompanyBtn")?.addEventListener("click", ()=>{ if(isSupervisor() || state.memberships.length > 1) renderCompanySelector(); });
   safeEl("saveDayBtn")?.addEventListener("click", saveDaily);
+  safeEl("gData")?.addEventListener("change", reloadDailyFormForSelectedDate);
   safeEl("saveCashInitBtn")?.addEventListener("click", saveCashInitial);
   safeEl("saveNewCashBtn")?.addEventListener("click", saveNewCash);
   safeEl("saveMovBtn")?.addEventListener("click", saveCashMovement);
@@ -2002,10 +2587,12 @@ function bindEvents() {
   safeEl("cancelFornEditBtn")?.addEventListener("click", resetSupplierForm);
   safeEl("saveFornMovBtn")?.addEventListener("click", saveSupplierMovement);
   safeEl("saveSupplierDetailMovBtn")?.addEventListener("click", saveSupplierDetailMovement);
+  safeEl("cancelSupplierDetailEditBtn")?.addEventListener("click", () => resetSupplierDetailMovementForm());
   safeEl("saveDipBtn")?.addEventListener("click", saveEmployee);
   safeEl("cancelDipEditBtn")?.addEventListener("click", resetEmployeeForm);
   safeEl("saveDipMovBtn")?.addEventListener("click", saveEmployeeMovement);
   safeEl("saveEmployeeDetailMovBtn")?.addEventListener("click", saveEmployeeDetailMovement);
+  safeEl("cancelEmployeeDetailEditBtn")?.addEventListener("click", () => resetEmployeeDetailMovementForm());
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
@@ -2036,6 +2623,9 @@ async function main() {
     seedFields();
     loadRememberedEmail();
     loadRememberedEmail();
+    window.setInterval(() => {
+      if (!safeEl("appView")?.classList.contains("hidden")) renderLiveChecks();
+    }, 15000);
     const ok = await initSupabase();
     if (!ok) return;
     supabase.auth.onAuthStateChange(async (_event, session)=>{ state.session = session; });

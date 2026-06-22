@@ -159,6 +159,23 @@
             <div id="cashSummary"></div>
           </div>
         </div>
+
+        <div class="split">
+          <div class="card">
+            <div class="toolbar">
+              <h3>Ultime modifiche / movimenti</h3>
+              <div id="latestActivityCount" class="muted small"></div>
+            </div>
+            <div id="latestActivityBox"></div>
+          </div>
+          <div class="card">
+            <div class="toolbar">
+              <h3>Verifica contabile continua</h3>
+              <div id="lastVerificationAt" class="muted small"></div>
+            </div>
+            <div id="accountingCheckBox"></div>
+          </div>
+        </div>
       </section>
 
       <section id="giornaliera" class="section">
@@ -227,7 +244,7 @@
             <div id="dailyCashInputs" class="grid4"></div>
           </div>
 
-          <div class="split">
+          <div class="daily-payments-stack">
             <div class="card inner">
               <div class="toolbar">
                 <div>
@@ -386,11 +403,11 @@
               <div class="field"><label>Importo</label><input id="supplierDetailImporto" type="number" step="0.01" value="0" /></div>
             </div>
             <div class="field"><label>Nota</label><input id="supplierDetailNota" placeholder="es. contanti / bonifico / fattura n. ..." /></div>
-            <div class="toolbar"><div class="muted small">Pagamento e acconto scalano automaticamente dalla cassa scelta.</div><button id="saveSupplierDetailMovBtn" type="button">Aggiungi movimento</button></div>
+            <div class="toolbar"><div class="muted small">Pagamento e acconto scalano automaticamente dalla cassa scelta.</div><div class="toolbar"><button class="secondary hidden" id="cancelSupplierDetailEditBtn" type="button">Annulla modifica</button><button id="saveSupplierDetailMovBtn" type="button">Aggiungi movimento</button></div></div>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th><th>Azioni</th></tr></thead>
               <tbody id="supplierDetailTable"></tbody>
             </table>
           </div>
@@ -460,11 +477,11 @@
               <div class="field"><label>Importo</label><input id="employeeDetailImporto" type="number" step="0.01" value="0" /></div>
             </div>
             <div class="field"><label>Nota</label><input id="employeeDetailNota" placeholder="es. acconto / turno extra / saldo mese" /></div>
-            <div class="toolbar"><div class="muted small">Il movimento scalerà automaticamente dalla cassa scelta.</div><button id="saveEmployeeDetailMovBtn" type="button">Aggiungi movimento</button></div>
+            <div class="toolbar"><div class="muted small">Il movimento scalerà automaticamente dalla cassa scelta.</div><div class="toolbar"><button class="secondary hidden" id="cancelEmployeeDetailEditBtn" type="button">Annulla modifica</button><button id="saveEmployeeDetailMovBtn" type="button">Aggiungi movimento</button></div></div>
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th></tr></thead>
+              <thead><tr><th>Data contabile</th><th>Data/ora operazione</th><th>Salvato il</th><th>Tipo</th><th>Importo</th><th>Nota</th><th>Azioni</th></tr></thead>
               <tbody id="employeeDetailTable"></tbody>
             </table>
           </div>
