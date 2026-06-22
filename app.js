@@ -222,6 +222,57 @@ function dailyAutoPrefix(dateStr) { return `[scheda giornaliera ${dateStr}]`; }
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch] || ch));
 }
+function normalizeSearchText(v) {
+  return String(v || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+function supplierAliases(supplier) {
+  const raw = supplier?.aliases;
+  if (Array.isArray(raw)) return raw.map(v => String(v || "").trim()).filter(Boolean);
+  if (typeof raw === "string") return raw.split(",").map(v => v.trim()).filter(Boolean);
+  return [];
+}
+function supplierSearchLabel(supplier) {
+  const aliases = supplierAliases(supplier);
+  return aliases.length ? `${supplier.nome} · alias: ${aliases.join(", ")}` : supplier.nome;
+}
+function supplierDatalistOptions() {
+  const seen = new Set();
+  const opts = [];
+  const addOption = (value, label) => {
+    const clean = String(value || "").trim();
+    if (!clean) return;
+    const key = normalizeSearchText(clean);
+    if (seen.has(key)) return;
+    seen.add(key);
+    opts.push(`<option value="${escapeHtml(clean)}" label="${escapeHtml(label || clean)}"></option>`);
+  };
+  (state.suppliers || []).forEach(s => {
+    addOption(s.nome, supplierSearchLabel(s));
+    supplierAliases(s).forEach(alias => addOption(alias, `alias di ${s.nome}`));
+  });
+  return opts.join("");
+}
+function refreshSuppliersDatalist() {
+  const el = safeEl("suppliersDatalist");
+  if (el) el.innerHTML = supplierDatalistOptions();
+}
+function findSupplierByNameOrAlias(value) {
+  const needle = normalizeSearchText(value);
+  if (!needle) return null;
+  return (state.suppliers || []).find(s => normalizeSearchText(s.nome) === needle)
+    || (state.suppliers || []).find(s => supplierAliases(s).some(alias => normalizeSearchText(alias) === needle))
+    || null;
+}
+function supplierInputValue(row = {}) {
+  if (row.supplier_search) return row.supplier_search;
+  if (row.supplier_id) return (state.suppliers || []).find(s => s.id === row.supplier_id)?.nome || "";
+  return "";
+}
+
 
 const SERVICE_NUMBER_FIELDS = ["coperti", "contanti", "pos", "asporto", "servizio", "bancone", "pizze", "copertiRistorante", "menu", "supplementi", "portate"];
 const SERVICE_METRIC_FIELDS = ["pizze", "copertiRistorante", "menu", "supplementi", "portate"];
@@ -378,7 +429,7 @@ function typeLabel(tipo) {
   return labels[tipo] || tipo || "—";
 }
 function supplierSelectOptions(selectedId = "") {
-  const options = [`<option value="">Seleziona fornitore esistente</option>`].concat((state.suppliers || []).map(s => `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>${escapeHtml(s.nome)}</option>`));
+  const options = [`<option value="">Seleziona fornitore esistente</option>`].concat((state.suppliers || []).map(s => `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>${escapeHtml(supplierSearchLabel(s))}</option>`));
   return options.join("");
 }
 function employeeSelectOptions(selectedId = "") {
@@ -391,7 +442,7 @@ function addDailySupplierPaymentRow(row = {}) {
   const div = document.createElement("div");
   div.className = "daily-row daily-supplier-row";
   div.innerHTML = `
-    <div class="field"><label>Fornitore esistente</label><select data-field="supplier_id">${supplierSelectOptions(row.supplier_id || "")}</select></div>
+    <div class="field"><label>Cerca fornitore / alias</label><input data-field="supplier_search" list="suppliersDatalist" value="${escapeHtml(supplierInputValue(row))}" placeholder="nome o alias" autocomplete="off" /><input data-field="supplier_id" type="hidden" value="${escapeHtml(row.supplier_id || "")}" /></div>
     <div class="field"><label>Nuovo fornitore</label><input data-field="new_supplier_name" value="${escapeHtml(row.new_supplier_name || "")}" placeholder="scrivi qui se non esiste" /></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
@@ -431,14 +482,19 @@ function renderDailyEmployeePayments(rows = []) {
   (rows || []).forEach(row => addDailyEmployeePaymentRow(row));
 }
 function collectDailySupplierPayments() {
-  return Array.from(safeEl("dailySupplierPayments")?.querySelectorAll(".daily-supplier-row") || []).map(row => ({
-    supplier_id: row.querySelector('[data-field="supplier_id"]')?.value || "",
-    new_supplier_name: row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "",
-    cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
-    importo: n(row.querySelector('[data-field="importo"]')?.value),
-    operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
-    nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
-  })).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
+  return Array.from(safeEl("dailySupplierPayments")?.querySelectorAll(".daily-supplier-row") || []).map(row => {
+    const supplierSearch = row.querySelector('[data-field="supplier_search"]')?.value?.trim() || "";
+    const supplier = findSupplierByNameOrAlias(supplierSearch);
+    return {
+      supplier_id: supplier?.id || "",
+      supplier_search: supplierSearch,
+      new_supplier_name: row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "",
+      cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
+      importo: n(row.querySelector('[data-field="importo"]')?.value),
+      operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
+      nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
+    };
+  }).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
 }
 function collectDailyEmployeePayments() {
   return Array.from(safeEl("dailyEmployeePayments")?.querySelectorAll(".daily-employee-row") || []).map(row => ({
@@ -1108,10 +1164,12 @@ async function clearAutoLinkedMovementsForDate(dateStr) {
   if (employees.error) throw employees.error;
 }
 async function getOrCreateSupplierFromDaily(row) {
+  const searched = findSupplierByNameOrAlias(row.supplier_search);
+  if (searched) return searched;
   if (row.supplier_id) return state.suppliers.find(s => s.id === row.supplier_id) || null;
   const name = String(row.new_supplier_name || "").trim();
   if (!name) return null;
-  const existing = state.suppliers.find(s => String(s.nome || "").toLowerCase() === name.toLowerCase());
+  const existing = state.suppliers.find(s => normalizeSearchText(s.nome) === normalizeSearchText(name));
   if (existing) return existing;
   const { data, error } = await supabase.from("suppliers").insert({
     company_id: state.activeCompany.id,
@@ -1323,7 +1381,8 @@ async function deleteSupplierByName(name) {
   await refreshData("Fornitore eliminato.");
 }
 async function saveSupplierMovement() {
-  const supplier = state.suppliers.find(s => s.nome === $("fornMovNome").value);
+  const supplierSearch = safeEl("fornMovSearch")?.value || safeEl("fornMovNome")?.value || "";
+  const supplier = findSupplierByNameOrAlias(supplierSearch);
   const payload = {
     supplierId: supplier?.id,
     data: dateFromDateTimeOrDate(safeEl("fornMovOperatedAt")?.value, $("fornMovData").value),
@@ -1670,7 +1729,10 @@ function renderCash() {
   }
 }
 function renderSuppliers() {
-  if (safeEl("fornMovNome")) $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${escapeHtml(s.nome)}</option>`).join("");
+  refreshSuppliersDatalist();
+  if (safeEl("fornMovNome") && safeEl("fornMovNome").tagName === "SELECT") {
+    $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${escapeHtml(supplierSearchLabel(s))}</option>`).join("");
+  }
   const table = safeEl("fornitoriTable");
   if (!table) return;
   table.innerHTML = state.suppliers.map(s=>{

@@ -345,7 +345,7 @@
           <div class="card">
             <h3>Movimento fornitore</h3>
             <div class="grid4">
-              <div class="field"><label>Fornitore</label><select id="fornMovNome"></select></div>
+              <div class="field"><label>Fornitore</label><input id="fornMovSearch" list="suppliersDatalist" placeholder="Cerca per nome o alias" autocomplete="off" /><datalist id="suppliersDatalist"></datalist><input id="fornMovNome" type="hidden" /></div>
               <div class="field"><label>Data contabile</label><input id="fornMovData" type="date" /></div>
               <div class="field"><label>Data/ora reale (facoltativa)</label><input id="fornMovOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="fornMovTipo"><option value="fattura">Fattura / da pagare</option><option value="pagamento">Pagamento</option><option value="acconto">Acconto</option><option value="extra">Extra / altro da pagare</option></select></div>
