@@ -221,6 +221,29 @@ function dailyAutoPrefix(dateStr) { return `[scheda giornaliera ${dateStr}]`; }
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch] || ch));
 }
+
+function serviceAmount(rec, key) {
+  const service = rec?.[key] || {};
+  return n(service.servizio ?? service[key] ?? 0);
+}
+function serviceBanconeAmount(rec, key) {
+  const service = rec?.[key] || {};
+  return n(service.bancone ?? 0);
+}
+function getDailyAsportoTotal(rec) {
+  return n(rec?.pranzo?.asporto)+n(rec?.cena?.asporto)+n(rec?.banchetti?.asporto);
+}
+function getDailyServiceTotal(rec) {
+  return serviceAmount(rec, "pranzo") + serviceAmount(rec, "cena") + serviceAmount(rec, "banchetti");
+}
+function getDailyBanconeTotal(rec) {
+  const perServizio = serviceBanconeAmount(rec, "pranzo") + serviceBanconeAmount(rec, "cena") + serviceBanconeAmount(rec, "banchetti");
+  return perServizio > 0 ? perServizio : n(rec?.bancone);
+}
+function serviceHasWorkData(service) {
+  return n(service?.coperti) > 0 || n(service?.asporto) > 0 || n(service?.servizio) > 0 || n(service?.pranzo) > 0 || n(service?.cena) > 0 || n(service?.banchetti) > 0 || n(service?.bancone) > 0;
+}
+
 function validateDaily(rec) {
   const alerts = [];
   const totals = getDailyTotals(rec);
@@ -229,11 +252,11 @@ function validateDaily(rec) {
   if (copertiPizzeria < 0) alerts.push("Coperti pizzeria negativi: i coperti ristorante superano i coperti totali.");
   if (n(rec.menu) + n(rec.supplementi) > n(rec.copertiRistorante)) alerts.push("Menù + supplementi superano i coperti ristorante.");
   const paymentNoService =
-    (n(rec.pranzo?.contanti)+n(rec.pranzo?.pos) > 0 && n(rec.pranzo?.coperti) === 0 && n(rec.pranzo?.asporto) === 0) ||
-    (n(rec.cena?.contanti)+n(rec.cena?.pos) > 0 && n(rec.cena?.coperti) === 0 && n(rec.cena?.asporto) === 0) ||
-    (n(rec.banchetti?.contanti)+n(rec.banchetti?.pos) > 0 && n(rec.banchetti?.coperti) === 0 && n(rec.banchetti?.asporto) === 0);
-  if (paymentNoService) alerts.push("Sono presenti incassi in una colonna con 0 coperti e 0 asporto.");
-  if (totals.totalIncasso > 0 && copertiTot === 0 && n(rec.pranzo?.asporto)+n(rec.cena?.asporto)+n(rec.banchetti?.asporto) === 0) alerts.push("Hai inserito incassi ma non risultano coperti o asporto.");
+    (n(rec.pranzo?.contanti)+n(rec.pranzo?.pos) > 0 && !serviceHasWorkData(rec.pranzo)) ||
+    (n(rec.cena?.contanti)+n(rec.cena?.pos) > 0 && !serviceHasWorkData(rec.cena)) ||
+    (n(rec.banchetti?.contanti)+n(rec.banchetti?.pos) > 0 && !serviceHasWorkData(rec.banchetti));
+  if (paymentNoService) alerts.push("Sono presenti incassi in un servizio senza coperti, asporto, servizio o bancone.");
+  if (totals.totalIncasso > 0 && copertiTot === 0 && getDailyAsportoTotal(rec) === 0 && getDailyServiceTotal(rec) === 0 && getDailyBanconeTotal(rec) === 0) alerts.push("Hai inserito incassi ma non risultano coperti, asporto, servizio o bancone.");
   if (totals.totalIncasso <= 0 && copertiTot > 0) alerts.push("Ci sono coperti ma l'incasso totale è zero.");
   return alerts;
 }
@@ -368,20 +391,25 @@ function fillDailyForm(rec) {
   $("gMenu").value = rec.menu ?? 0;
   $("gSupplementi").value = rec.supplementi ?? 0;
   $("gPortate").value = rec.portate ?? 0;
-  $("gBancone").value = rec.bancone ?? 0;
   $("gNote").value = rec.note || "";
   $("pranzoCoperti").value = rec.pranzo?.coperti ?? 0;
   $("pranzoAsporto").value = rec.pranzo?.asporto ?? 0;
   $("pranzoContanti").value = rec.pranzo?.contanti ?? 0;
   $("pranzoPos").value = rec.pranzo?.pos ?? 0;
+  $("pranzoServizio").value = serviceAmount(rec, "pranzo");
+  $("pranzoBancone").value = serviceBanconeAmount(rec, "pranzo") || (rec.pranzo?.bancone ?? 0);
   $("cenaCoperti").value = rec.cena?.coperti ?? 0;
   $("cenaAsporto").value = rec.cena?.asporto ?? 0;
   $("cenaContanti").value = rec.cena?.contanti ?? 0;
   $("cenaPos").value = rec.cena?.pos ?? 0;
+  $("cenaServizio").value = serviceAmount(rec, "cena");
+  $("cenaBancone").value = serviceBanconeAmount(rec, "cena") || (rec.cena?.bancone ?? 0);
   $("banchettiCoperti").value = rec.banchetti?.coperti ?? 0;
   $("banchettiAsporto").value = rec.banchetti?.asporto ?? 0;
   $("banchettiContanti").value = rec.banchetti?.contanti ?? 0;
   $("banchettiPos").value = rec.banchetti?.pos ?? 0;
+  $("banchettiServizio").value = serviceAmount(rec, "banchetti");
+  $("banchettiBancone").value = serviceBanconeAmount(rec, "banchetti") || (rec.banchetti?.bancone ?? 0);
   renderDailyCashInputs(rec);
   renderDailySupplierPayments(rec.supplierPayments || []);
   renderDailyEmployeePayments(rec.employeePayments || []);
@@ -394,11 +422,11 @@ function collectDailyFromForm() {
     menu: n($("gMenu").value),
     supplementi: n($("gSupplementi").value),
     portate: n($("gPortate").value),
-    bancone: n($("gBancone").value),
+    bancone: n($("pranzoBancone").value) + n($("cenaBancone").value) + n($("banchettiBancone").value),
     note: $("gNote").value.trim(),
-    pranzo: { coperti: n($("pranzoCoperti").value), asporto: n($("pranzoAsporto").value), contanti: n($("pranzoContanti").value), pos: n($("pranzoPos").value) },
-    cena: { coperti: n($("cenaCoperti").value), asporto: n($("cenaAsporto").value), contanti: n($("cenaContanti").value), pos: n($("cenaPos").value) },
-    banchetti: { coperti: n($("banchettiCoperti").value), asporto: n($("banchettiAsporto").value), contanti: n($("banchettiContanti").value), pos: n($("banchettiPos").value) },
+    pranzo: { coperti: n($("pranzoCoperti").value), contanti: n($("pranzoContanti").value), pos: n($("pranzoPos").value), asporto: n($("pranzoAsporto").value), servizio: n($("pranzoServizio").value), bancone: n($("pranzoBancone").value) },
+    cena: { coperti: n($("cenaCoperti").value), contanti: n($("cenaContanti").value), pos: n($("cenaPos").value), asporto: n($("cenaAsporto").value), servizio: n($("cenaServizio").value), bancone: n($("cenaBancone").value) },
+    banchetti: { coperti: n($("banchettiCoperti").value), contanti: n($("banchettiContanti").value), pos: n($("banchettiPos").value), asporto: n($("banchettiAsporto").value), servizio: n($("banchettiServizio").value), bancone: n($("banchettiBancone").value) },
     casse: collectDailyCashFromForm(),
     supplierPayments: collectDailySupplierPayments(),
     employeePayments: collectDailyEmployeePayments()
@@ -407,9 +435,9 @@ function collectDailyFromForm() {
 function resetDailyForm() {
   fillDailyForm({
     data: todayStr(), pizze:0,copertiRistorante:0,menu:0,supplementi:0,portate:0,bancone:0,note:"",
-    pranzo:{coperti:0,asporto:0,contanti:0,pos:0},
-    cena:{coperti:0,asporto:0,contanti:0,pos:0},
-    banchetti:{coperti:0,asporto:0,contanti:0,pos:0}
+    pranzo:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0},
+    cena:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0},
+    banchetti:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0}
   });
 }
 
@@ -1611,19 +1639,20 @@ function recordsInRange(from, to) {
   return state.dailyRecords.filter(r => (!range.from || r.data >= range.from) && (!range.to || r.data <= range.to));
 }
 function renderReportFromRecords(records, label = "") {
-  let copPranzo=0,copCena=0,copBanchetti=0,incasso=0,incassoNetto=0,commissioni=0,asporto=0,bancone=0,pizze=0,menu=0,supp=0,portate=0;
+  let copPranzo=0,copCena=0,copBanchetti=0,incasso=0,incassoNetto=0,commissioni=0,asporto=0,bancone=0,pizze=0,menu=0,supp=0,portate=0,servizioPranzo=0,servizioCena=0,servizioBanchetti=0;
   const cashTotals = {};
   const cashGrossTotals = {};
   const cashFees = {};
   cashNames().forEach(c => { cashTotals[c] = 0; cashGrossTotals[c] = 0; cashFees[c] = 0; });
   records.forEach(r=>{
     copPranzo += n(r.pranzo?.coperti); copCena += n(r.cena?.coperti); copBanchetti += n(r.banchetti?.coperti);
+    servizioPranzo += serviceAmount(r, "pranzo"); servizioCena += serviceAmount(r, "cena"); servizioBanchetti += serviceAmount(r, "banchetti");
     const totals = getDailyTotals(r);
     incasso += totals.totalIncasso;
     incassoNetto += totals.totalIncassoNetto;
     commissioni += totals.totalCommissioni;
-    asporto += n(r.pranzo?.asporto)+n(r.cena?.asporto)+n(r.banchetti?.asporto);
-    bancone += n(r.bancone); pizze += n(r.pizze); menu += n(r.menu); supp += n(r.supplementi); portate += n(r.portate);
+    asporto += getDailyAsportoTotal(r);
+    bancone += getDailyBanconeTotal(r); pizze += n(r.pizze); menu += n(r.menu); supp += n(r.supplementi); portate += n(r.portate);
     cashNames().forEach(c => {
       cashTotals[c] = n(cashTotals[c]) + getDailyCashNetAmount(r, c);
       cashGrossTotals[c] = n(cashGrossTotals[c]) + getDailyCashAmount(r, c);
@@ -1641,6 +1670,9 @@ function renderReportFromRecords(records, label = "") {
     `<div class="card inner"><strong>Incasso netto dopo SumUp</strong><div>${euro(incassoNetto)}</div></div>`,
     `<div class="card inner"><strong>Commissioni SumUp POS</strong><div>${euro(commissioni)}</div></div>`,
     `<div class="card inner"><strong>Asporto totale</strong><div>${euro(asporto)}</div></div>`,
+    `<div class="card inner"><strong>Pranzo</strong><div>${euro(servizioPranzo)}</div></div>`,
+    `<div class="card inner"><strong>Cena</strong><div>${euro(servizioCena)}</div></div>`,
+    `<div class="card inner"><strong>Banchetti</strong><div>${euro(servizioBanchetti)}</div></div>`,
     `<div class="card inner"><strong>Bancone totale</strong><div>${euro(bancone)}</div></div>`,
     `<div class="card inner"><strong>Pizze totali</strong><div>${pizze}</div></div>`,
     `<div class="card inner"><strong>Menù / Supplementi</strong><div>${menu} / ${supp}</div></div>`,
