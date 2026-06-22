@@ -179,8 +179,9 @@ function netAmountForCash(cassa, amount) {
   return isPosCash(cassa) ? Math.max(0, gross - sumupFee(gross)) : gross;
 }
 function legacyDailyCash(rec, cassa) {
-  if (cassa === "contanti") return n(rec.pranzo?.contanti)+n(rec.cena?.contanti)+n(rec.banchetti?.contanti);
-  if (cassa === "pos") return n(rec.pranzo?.pos)+n(rec.cena?.pos)+n(rec.banchetti?.pos);
+  const rows = getAllServiceRows(rec || {});
+  if (cassa === "contanti") return rows.reduce((a,row)=>a+n(row.service.contanti),0);
+  if (cassa === "pos") return rows.reduce((a,row)=>a+n(row.service.pos),0);
   return 0;
 }
 // Importo lordo inserito nella scheda giornaliera.
@@ -212,7 +213,7 @@ function getDailyTotals(rec) {
   const totalIncasso = getDailyCashTotalGross(rec);
   const totalCommissioni = getDailyCashTotalFee(rec);
   const totalIncassoNetto = getDailyCashTotalNet(rec);
-  const totalCoperti = n(rec.pranzo?.coperti)+n(rec.cena?.coperti)+n(rec.banchetti?.coperti);
+  const totalCoperti = getAllServiceRows(rec || {}).reduce((a,row)=>a+n(row.service.coperti),0);
   return { totalIncasso, totalIncassoNetto, totalCommissioni, totalCoperti };
 }
 function getCurrentMonthPrefix() { return todayStr().slice(0, 7); }
@@ -222,73 +223,141 @@ function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch] || ch));
 }
 
+const SERVICE_NUMBER_FIELDS = ["coperti", "contanti", "pos", "asporto", "servizio", "bancone", "pizze", "copertiRistorante", "menu", "supplementi", "portate"];
+const SERVICE_METRIC_FIELDS = ["pizze", "copertiRistorante", "menu", "supplementi", "portate"];
+function emptyService(extra = {}) {
+  return { nome: "", coperti:0, contanti:0, pos:0, asporto:0, servizio:0, bancone:0, pizze:0, copertiRistorante:0, menu:0, supplementi:0, portate:0, ...extra };
+}
+function normalizeService(service = {}, key = "") {
+  const out = emptyService({ nome: service?.nome || "" });
+  SERVICE_NUMBER_FIELDS.forEach(field => {
+    if (field === "servizio") out.servizio = n(service?.servizio ?? (key ? service?.[key] : 0));
+    else out[field] = n(service?.[field]);
+  });
+  return out;
+}
+function getBanchettiList(rec = {}) {
+  if (Array.isArray(rec.banchettiList)) return rec.banchettiList.map((b,i) => normalizeService({ nome: b.nome || `Banchetto ${i+1}`, ...b }, "banchetti"));
+  if (rec.banchetti && Object.keys(rec.banchetti || {}).length) return [normalizeService({ nome: "Banchetto 1", ...rec.banchetti }, "banchetti")];
+  return [];
+}
+function aggregateServiceList(list = []) {
+  const out = emptyService({ nome: "Totale banchetti" });
+  list.forEach(item => {
+    SERVICE_NUMBER_FIELDS.forEach(field => { out[field] += n(item?.[field]); });
+  });
+  return out;
+}
+function getBanchettiAggregate(rec = {}) {
+  return aggregateServiceList(getBanchettiList(rec));
+}
+function getService(rec = {}, key = "pranzo") {
+  if (key === "banchetti") return getBanchettiAggregate(rec);
+  return normalizeService(rec?.[key] || {}, key);
+}
+function getAllServiceRows(rec = {}) {
+  return [
+    { key:"pranzo", label:"Pranzo", service:getService(rec, "pranzo") },
+    { key:"cena", label:"Cena", service:getService(rec, "cena") },
+    ...getBanchettiList(rec).map((service, i) => ({ key:`banchetto_${i+1}`, label: service.nome || `Banchetto ${i+1}`, service }))
+  ];
+}
 function serviceAmount(rec, key) {
-  const service = rec?.[key] || {};
-  return n(service.servizio ?? service[key] ?? 0);
+  return getService(rec, key).servizio;
 }
 function serviceBanconeAmount(rec, key) {
-  const service = rec?.[key] || {};
-  return n(service.bancone ?? 0);
+  return getService(rec, key).bancone;
 }
 function getDailyAsportoTotal(rec) {
-  return n(rec?.pranzo?.asporto)+n(rec?.cena?.asporto)+n(rec?.banchetti?.asporto);
+  return getAllServiceRows(rec).reduce((a,row)=>a+n(row.service.asporto),0);
 }
 function getDailyServiceTotal(rec) {
-  return serviceAmount(rec, "pranzo") + serviceAmount(rec, "cena") + serviceAmount(rec, "banchetti");
+  return getAllServiceRows(rec).reduce((a,row)=>a+n(row.service.servizio),0);
 }
 function getDailyBanconeTotal(rec) {
-  const perServizio = serviceBanconeAmount(rec, "pranzo") + serviceBanconeAmount(rec, "cena") + serviceBanconeAmount(rec, "banchetti");
-  return perServizio > 0 ? perServizio : n(rec?.bancone);
+  const total = getAllServiceRows(rec).reduce((a,row)=>a+n(row.service.bancone),0);
+  return total > 0 ? total : n(rec?.bancone);
+}
+function dailyMetricTotal(rec, field) {
+  const total = getAllServiceRows(rec).reduce((a,row)=>a+n(row.service[field]),0);
+  return total > 0 ? total : n(rec?.[field]);
 }
 function serviceHasWorkData(service) {
-  return n(service?.coperti) > 0 || n(service?.asporto) > 0 || n(service?.servizio) > 0 || n(service?.pranzo) > 0 || n(service?.cena) > 0 || n(service?.banchetti) > 0 || n(service?.bancone) > 0;
+  return SERVICE_NUMBER_FIELDS.some(field => n(service?.[field]) > 0);
 }
-
+function serviceMoneyParts(service) {
+  return n(service?.asporto) + n(service?.servizio) + n(service?.bancone);
+}
+function servicePaymentTotal(service) {
+  return n(service?.contanti) + n(service?.pos);
+}
 function validateDaily(rec) {
   const alerts = [];
   const totals = getDailyTotals(rec);
   const copertiTot = totals.totalCoperti;
-  const copertiPizzeria = copertiTot - n(rec.copertiRistorante);
+  const copertiRistorante = dailyMetricTotal(rec, "copertiRistorante");
+  const copertiPizzeria = copertiTot - copertiRistorante;
   if (copertiPizzeria < 0) alerts.push("Coperti pizzeria negativi: i coperti ristorante superano i coperti totali.");
-  if (n(rec.menu) + n(rec.supplementi) > n(rec.copertiRistorante)) alerts.push("Menù + supplementi superano i coperti ristorante.");
-  const paymentNoService =
-    (n(rec.pranzo?.contanti)+n(rec.pranzo?.pos) > 0 && !serviceHasWorkData(rec.pranzo)) ||
-    (n(rec.cena?.contanti)+n(rec.cena?.pos) > 0 && !serviceHasWorkData(rec.cena)) ||
-    (n(rec.banchetti?.contanti)+n(rec.banchetti?.pos) > 0 && !serviceHasWorkData(rec.banchetti));
-  if (paymentNoService) alerts.push("Sono presenti incassi in un servizio senza coperti, asporto, servizio o bancone.");
+  if (dailyMetricTotal(rec, "menu") + dailyMetricTotal(rec, "supplementi") > copertiRistorante) alerts.push("Menù + supplementi superano i coperti ristorante.");
+
+  getAllServiceRows(rec).forEach(row => {
+    const service = row.service;
+    const pagamento = servicePaymentTotal(service);
+    const parti = serviceMoneyParts(service);
+    if (pagamento > 0 && parti <= 0) alerts.push(`${row.label}: sono presenti contanti/POS ma asporto + servizio + bancone è zero.`);
+    if (Math.abs(parti - pagamento) > 0.01) {
+      alerts.push(`${row.label}: asporto + servizio + bancone (${euro(parti)}) non coincide con contanti + POS (${euro(pagamento)}).`);
+    }
+  });
+
   if (totals.totalIncasso > 0 && copertiTot === 0 && getDailyAsportoTotal(rec) === 0 && getDailyServiceTotal(rec) === 0 && getDailyBanconeTotal(rec) === 0) alerts.push("Hai inserito incassi ma non risultano coperti, asporto, servizio o bancone.");
   if (totals.totalIncasso <= 0 && copertiTot > 0) alerts.push("Ci sono coperti ma l'incasso totale è zero.");
   return alerts;
 }
-
+function autoCashFromRecord(rec = {}) {
+  const contanti = getAllServiceRows(rec).reduce((a,row)=>a+n(row.service.contanti),0);
+  const pos = getAllServiceRows(rec).reduce((a,row)=>a+n(row.service.pos),0);
+  const fallback = rec?.casse || {};
+  return { contanti: contanti || n(fallback.contanti), pos: pos || n(fallback.pos) };
+}
+function calculateDailyCashAutoFromForm() {
+  const banchetti = collectBanchettiFromForm();
+  return {
+    contanti: n(safeEl("pranzoContanti")?.value) + n(safeEl("cenaContanti")?.value) + banchetti.reduce((a,b)=>a+n(b.contanti),0),
+    pos: n(safeEl("pranzoPos")?.value) + n(safeEl("cenaPos")?.value) + banchetti.reduce((a,b)=>a+n(b.pos),0),
+  };
+}
+function updateDailyCashAuto() {
+  const auto = calculateDailyCashAutoFromForm();
+  const contantiInput = safeEl("dailyCashInputs")?.querySelector('input[data-daily-cash="contanti"]');
+  const posInput = safeEl("dailyCashInputs")?.querySelector('input[data-daily-cash="pos"]');
+  if (contantiInput) contantiInput.value = auto.contanti;
+  if (posInput) posInput.value = auto.pos;
+}
 function renderDailyCashInputs(rec = null) {
   const box = safeEl("dailyCashInputs");
   if (!box) return;
   const currentValues = {};
   box.querySelectorAll("input[data-daily-cash]").forEach(input => currentValues[input.dataset.dailyCash] = input.value);
+  const auto = rec ? autoCashFromRecord(rec) : calculateDailyCashAutoFromForm();
   box.innerHTML = cashNames().map(name => {
-    const value = rec ? getDailyCashAmount(rec, name) : (currentValues[name] ?? 0);
+    let value = currentValues[name] ?? 0;
+    let readonly = "";
+    let note = "";
+    if (name === "contanti") { value = auto.contanti; readonly = "readonly"; note = `<small class="muted">Calcolato automaticamente dai servizi.</small>`; }
+    else if (name === "pos") { value = auto.pos; readonly = "readonly"; note = `<small class="muted">POS lordo calcolato automaticamente. SumUp -0,95% nel saldo cassa.</small>`; }
+    else if (rec?.casse && Object.prototype.hasOwnProperty.call(rec.casse, name)) value = n(rec.casse[name]);
     const label = isPosCash(name) ? "POS lordo" : cashLabel(name);
-    const note = isPosCash(name) ? `<small class="muted">SumUp: viene tolto automaticamente lo 0,95% nel saldo cassa.</small>` : "";
-    return `<div class="field"><label>${escapeHtml(label)}</label><input data-daily-cash="${escapeHtml(name)}" type="number" step="0.01" value="${value}" />${note}</div>`;
+    return `<div class="field"><label>${escapeHtml(label)}</label><input data-daily-cash="${escapeHtml(name)}" type="number" step="0.01" value="${value}" ${readonly} />${note}</div>`;
   }).join("");
 }
 function collectDailyCashFromForm() {
-  const values = {};
+  const auto = calculateDailyCashAutoFromForm();
+  const values = { contanti: auto.contanti, pos: auto.pos };
   safeEl("dailyCashInputs")?.querySelectorAll("input[data-daily-cash]").forEach(input => {
-    values[input.dataset.dailyCash] = n(input.value);
+    const name = input.dataset.dailyCash;
+    if (!["contanti", "pos"].includes(name)) values[name] = n(input.value);
   });
-  const legacy = collectLegacyDailyFromFormOnly();
-  const legacyContanti = legacyDailyCash(legacy, "contanti");
-  const legacyPos = legacyDailyCash(legacy, "pos");
-  const formTotal = Object.values(values).reduce((a,b)=>a+n(b),0);
-
-  // Se nella nuova chiusura cassa è tutto 0 ma sono stati compilati i vecchi campi
-  // Pranzo/Cena/Banchetti, usiamo quelli per non far risultare la dashboard a zero.
-  if (!Object.keys(values).length || (formTotal === 0 && (legacyContanti > 0 || legacyPos > 0))) {
-    values.contanti = legacyContanti;
-    values.pos = legacyPos;
-  }
   return values;
 }
 function cashSelectOptions(selected = "contanti") {
@@ -309,10 +378,12 @@ function typeLabel(tipo) {
   return labels[tipo] || tipo || "—";
 }
 function supplierSelectOptions(selectedId = "") {
-  return (state.suppliers || []).map(s => `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>${escapeHtml(s.nome)}</option>`).join("");
+  const options = [`<option value="">Seleziona fornitore esistente</option>`].concat((state.suppliers || []).map(s => `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>${escapeHtml(s.nome)}</option>`));
+  return options.join("");
 }
 function employeeSelectOptions(selectedId = "") {
-  return (state.employees || []).map(e => `<option value="${e.id}" ${e.id === selectedId ? "selected" : ""}>${escapeHtml(e.nome)}</option>`).join("");
+  const options = [`<option value="">Seleziona dipendente esistente</option>`].concat((state.employees || []).map(e => `<option value="${e.id}" ${e.id === selectedId ? "selected" : ""}>${escapeHtml(e.nome)}</option>`));
+  return options.join("");
 }
 function addDailySupplierPaymentRow(row = {}) {
   const box = safeEl("dailySupplierPayments");
@@ -320,7 +391,8 @@ function addDailySupplierPaymentRow(row = {}) {
   const div = document.createElement("div");
   div.className = "daily-row daily-supplier-row";
   div.innerHTML = `
-    <div class="field"><label>Fornitore</label><select data-field="supplier_id">${supplierSelectOptions(row.supplier_id || "")}</select></div>
+    <div class="field"><label>Fornitore esistente</label><select data-field="supplier_id">${supplierSelectOptions(row.supplier_id || "")}</select></div>
+    <div class="field"><label>Nuovo fornitore</label><input data-field="new_supplier_name" value="${escapeHtml(row.new_supplier_name || "")}" placeholder="scrivi qui se non esiste" /></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
     <div class="field"><label>Data/ora pagamento</label><input data-field="operated_at" type="datetime-local" value="${escapeHtml(row.operated_at || "")}" /></div>
@@ -335,7 +407,8 @@ function addDailyEmployeePaymentRow(row = {}) {
   const div = document.createElement("div");
   div.className = "daily-row daily-employee-row";
   div.innerHTML = `
-    <div class="field"><label>Dipendente</label><select data-field="employee_id">${employeeSelectOptions(row.employee_id || "")}</select></div>
+    <div class="field"><label>Dipendente esistente</label><select data-field="employee_id">${employeeSelectOptions(row.employee_id || "")}</select></div>
+    <div class="field"><label>Nuovo dipendente</label><input data-field="new_employee_name" value="${escapeHtml(row.new_employee_name || "")}" placeholder="scrivi qui se non esiste" /></div>
     <div class="field"><label>Tipo</label><select data-field="tipo"><option value="acconto" ${(row.tipo || "acconto") === "acconto" ? "selected" : ""}>Acconto</option><option value="pagamento" ${row.tipo === "pagamento" ? "selected" : ""}>Pagamento</option><option value="extra" ${row.tipo === "extra" ? "selected" : ""}>Extra</option></select></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
@@ -360,84 +433,144 @@ function renderDailyEmployeePayments(rows = []) {
 function collectDailySupplierPayments() {
   return Array.from(safeEl("dailySupplierPayments")?.querySelectorAll(".daily-supplier-row") || []).map(row => ({
     supplier_id: row.querySelector('[data-field="supplier_id"]')?.value || "",
+    new_supplier_name: row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "",
     cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
     importo: n(row.querySelector('[data-field="importo"]')?.value),
     operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
     nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
-  })).filter(row => row.supplier_id && row.importo > 0);
+  })).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
 }
 function collectDailyEmployeePayments() {
   return Array.from(safeEl("dailyEmployeePayments")?.querySelectorAll(".daily-employee-row") || []).map(row => ({
     employee_id: row.querySelector('[data-field="employee_id"]')?.value || "",
+    new_employee_name: row.querySelector('[data-field="new_employee_name"]')?.value?.trim() || "",
     tipo: row.querySelector('[data-field="tipo"]')?.value || "acconto",
     cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
     importo: n(row.querySelector('[data-field="importo"]')?.value),
     operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
     nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
-  })).filter(row => row.employee_id && row.importo > 0);
+  })).filter(row => (row.employee_id || row.new_employee_name) && row.importo > 0);
 }
 function collectLegacyDailyFromFormOnly() {
   return {
     pranzo: { contanti: n(safeEl("pranzoContanti")?.value), pos: n(safeEl("pranzoPos")?.value) },
     cena: { contanti: n(safeEl("cenaContanti")?.value), pos: n(safeEl("cenaPos")?.value) },
-    banchetti: { contanti: n(safeEl("banchettiContanti")?.value), pos: n(safeEl("banchettiPos")?.value) }
+    banchetti: { contanti: collectBanchettiFromForm().reduce((a,b)=>a+n(b.contanti),0), pos: collectBanchettiFromForm().reduce((a,b)=>a+n(b.pos),0) }
   };
 }
-
+function fillService(prefix, service, key) {
+  const s = normalizeService(service, key);
+  const map = { Coperti:"coperti", Asporto:"asporto", Contanti:"contanti", Pos:"pos", Servizio:"servizio", Bancone:"bancone", Pizze:"pizze", CopertiRistorante:"copertiRistorante", Menu:"menu", Supplementi:"supplementi", Portate:"portate" };
+  Object.entries(map).forEach(([suffix, field]) => { if (safeEl(prefix + suffix)) safeEl(prefix + suffix).value = s[field] ?? 0; });
+}
+function collectService(prefix) {
+  return normalizeService({
+    coperti: n(safeEl(prefix + "Coperti")?.value),
+    contanti: n(safeEl(prefix + "Contanti")?.value),
+    pos: n(safeEl(prefix + "Pos")?.value),
+    asporto: n(safeEl(prefix + "Asporto")?.value),
+    servizio: n(safeEl(prefix + "Servizio")?.value),
+    bancone: n(safeEl(prefix + "Bancone")?.value),
+    pizze: n(safeEl(prefix + "Pizze")?.value),
+    copertiRistorante: n(safeEl(prefix + "CopertiRistorante")?.value),
+    menu: n(safeEl(prefix + "Menu")?.value),
+    supplementi: n(safeEl(prefix + "Supplementi")?.value),
+    portate: n(safeEl(prefix + "Portate")?.value),
+  });
+}
+function addBanchettoRow(row = {}) {
+  const box = safeEl("banchettiRows");
+  if (!box) return;
+  const s = normalizeService(row, "banchetti");
+  const div = document.createElement("div");
+  div.className = "card inner banchetto-row";
+  div.innerHTML = `
+    <div class="toolbar"><h4>${escapeHtml(s.nome || "Banchetto")}</h4><button class="secondary banchetto-remove-btn" type="button">Rimuovi</button></div>
+    <div class="grid3">
+      <div class="field"><label>Nome banchetto</label><input data-field="nome" value="${escapeHtml(s.nome || "")}" placeholder="es. Comunione / Compleanno" /></div>
+      <div class="field"><label>Coperti</label><input data-field="coperti" type="number" value="${s.coperti}" /></div>
+      <div class="field"><label>Contanti</label><input data-field="contanti" type="number" step="0.01" value="${s.contanti}" /></div>
+      <div class="field"><label>POS lordo</label><input data-field="pos" type="number" step="0.01" value="${s.pos}" /></div>
+      <div class="field"><label>Asporto €</label><input data-field="asporto" type="number" step="0.01" value="${s.asporto}" /></div>
+      <div class="field"><label>Banchetti €</label><input data-field="servizio" type="number" step="0.01" value="${s.servizio}" /></div>
+      <div class="field"><label>Bancone €</label><input data-field="bancone" type="number" step="0.01" value="${s.bancone}" /></div>
+      <div class="field"><label>Pizze totali</label><input data-field="pizze" type="number" value="${s.pizze}" /></div>
+      <div class="field"><label>Coperti ristorante</label><input data-field="copertiRistorante" type="number" value="${s.copertiRistorante}" /></div>
+      <div class="field"><label>Menù</label><input data-field="menu" type="number" value="${s.menu}" /></div>
+      <div class="field"><label>Supplementi</label><input data-field="supplementi" type="number" value="${s.supplementi}" /></div>
+      <div class="field"><label>Portate</label><input data-field="portate" type="number" value="${s.portate}" /></div>
+    </div>
+    <p class="muted small">Controllo: asporto + banchetti + bancone deve essere uguale a contanti + POS.</p>`;
+  div.querySelector(".banchetto-remove-btn")?.addEventListener("click", () => { div.remove(); if (!safeEl("banchettiRows")?.querySelector(".banchetto-row")) addBanchettoRow({}); updateDailyCashAuto(); });
+  box.appendChild(div);
+}
+function renderBanchettiRows(rows = []) {
+  const box = safeEl("banchettiRows");
+  if (!box) return;
+  box.innerHTML = "";
+  const list = rows.length ? rows : [emptyService({ nome:"Banchetto 1" })];
+  list.forEach(row => addBanchettoRow(row));
+}
+function collectBanchettiFromForm() {
+  return Array.from(safeEl("banchettiRows")?.querySelectorAll(".banchetto-row") || []).map((row,i) => normalizeService({
+    nome: row.querySelector('[data-field="nome"]')?.value?.trim() || `Banchetto ${i+1}`,
+    coperti: n(row.querySelector('[data-field="coperti"]')?.value),
+    contanti: n(row.querySelector('[data-field="contanti"]')?.value),
+    pos: n(row.querySelector('[data-field="pos"]')?.value),
+    asporto: n(row.querySelector('[data-field="asporto"]')?.value),
+    servizio: n(row.querySelector('[data-field="servizio"]')?.value),
+    bancone: n(row.querySelector('[data-field="bancone"]')?.value),
+    pizze: n(row.querySelector('[data-field="pizze"]')?.value),
+    copertiRistorante: n(row.querySelector('[data-field="copertiRistorante"]')?.value),
+    menu: n(row.querySelector('[data-field="menu"]')?.value),
+    supplementi: n(row.querySelector('[data-field="supplementi"]')?.value),
+    portate: n(row.querySelector('[data-field="portate"]')?.value),
+  }, "banchetti")).filter(row => serviceHasWorkData(row) || row.nome);
+}
 function fillDailyForm(rec) {
-  $("gData").value = rec.data || "";
-  $("gPizze").value = rec.pizze ?? 0;
-  $("gCopertiRistorante").value = rec.copertiRistorante ?? 0;
-  $("gMenu").value = rec.menu ?? 0;
-  $("gSupplementi").value = rec.supplementi ?? 0;
-  $("gPortate").value = rec.portate ?? 0;
-  $("gNote").value = rec.note || "";
-  $("pranzoCoperti").value = rec.pranzo?.coperti ?? 0;
-  $("pranzoAsporto").value = rec.pranzo?.asporto ?? 0;
-  $("pranzoContanti").value = rec.pranzo?.contanti ?? 0;
-  $("pranzoPos").value = rec.pranzo?.pos ?? 0;
-  $("pranzoServizio").value = serviceAmount(rec, "pranzo");
-  $("pranzoBancone").value = serviceBanconeAmount(rec, "pranzo") || (rec.pranzo?.bancone ?? 0);
-  $("cenaCoperti").value = rec.cena?.coperti ?? 0;
-  $("cenaAsporto").value = rec.cena?.asporto ?? 0;
-  $("cenaContanti").value = rec.cena?.contanti ?? 0;
-  $("cenaPos").value = rec.cena?.pos ?? 0;
-  $("cenaServizio").value = serviceAmount(rec, "cena");
-  $("cenaBancone").value = serviceBanconeAmount(rec, "cena") || (rec.cena?.bancone ?? 0);
-  $("banchettiCoperti").value = rec.banchetti?.coperti ?? 0;
-  $("banchettiAsporto").value = rec.banchetti?.asporto ?? 0;
-  $("banchettiContanti").value = rec.banchetti?.contanti ?? 0;
-  $("banchettiPos").value = rec.banchetti?.pos ?? 0;
-  $("banchettiServizio").value = serviceAmount(rec, "banchetti");
-  $("banchettiBancone").value = serviceBanconeAmount(rec, "banchetti") || (rec.banchetti?.bancone ?? 0);
+  if (safeEl("gData")) $("gData").value = rec.data || todayStr();
+  if (safeEl("gNote")) $("gNote").value = rec.note || "";
+  fillService("pranzo", rec.pranzo || {}, "pranzo");
+  fillService("cena", rec.cena || {}, "cena");
+  renderBanchettiRows(getBanchettiList(rec));
   renderDailyCashInputs(rec);
   renderDailySupplierPayments(rec.supplierPayments || []);
   renderDailyEmployeePayments(rec.employeePayments || []);
+  updateDailyCashAuto();
 }
 function collectDailyFromForm() {
-  return {
-    data: $("gData").value,
-    pizze: n($("gPizze").value),
-    copertiRistorante: n($("gCopertiRistorante").value),
-    menu: n($("gMenu").value),
-    supplementi: n($("gSupplementi").value),
-    portate: n($("gPortate").value),
-    bancone: n($("pranzoBancone").value) + n($("cenaBancone").value) + n($("banchettiBancone").value),
-    note: $("gNote").value.trim(),
-    pranzo: { coperti: n($("pranzoCoperti").value), contanti: n($("pranzoContanti").value), pos: n($("pranzoPos").value), asporto: n($("pranzoAsporto").value), servizio: n($("pranzoServizio").value), bancone: n($("pranzoBancone").value) },
-    cena: { coperti: n($("cenaCoperti").value), contanti: n($("cenaContanti").value), pos: n($("cenaPos").value), asporto: n($("cenaAsporto").value), servizio: n($("cenaServizio").value), bancone: n($("cenaBancone").value) },
-    banchetti: { coperti: n($("banchettiCoperti").value), contanti: n($("banchettiContanti").value), pos: n($("banchettiPos").value), asporto: n($("banchettiAsporto").value), servizio: n($("banchettiServizio").value), bancone: n($("banchettiBancone").value) },
+  const pranzo = collectService("pranzo");
+  const cena = collectService("cena");
+  const banchettiList = collectBanchettiFromForm();
+  const banchetti = aggregateServiceList(banchettiList);
+  const rec = {
+    data: safeEl("gData")?.value || todayStr(),
+    note: safeEl("gNote")?.value?.trim() || "",
+    pranzo,
+    cena,
+    banchetti,
+    banchettiList,
     casse: collectDailyCashFromForm(),
     supplierPayments: collectDailySupplierPayments(),
     employeePayments: collectDailyEmployeePayments()
   };
+  rec.pizze = dailyMetricTotal(rec, "pizze");
+  rec.copertiRistorante = dailyMetricTotal(rec, "copertiRistorante");
+  rec.menu = dailyMetricTotal(rec, "menu");
+  rec.supplementi = dailyMetricTotal(rec, "supplementi");
+  rec.portate = dailyMetricTotal(rec, "portate");
+  rec.bancone = getDailyBanconeTotal(rec);
+  return rec;
 }
 function resetDailyForm() {
   fillDailyForm({
-    data: todayStr(), pizze:0,copertiRistorante:0,menu:0,supplementi:0,portate:0,bancone:0,note:"",
-    pranzo:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0},
-    cena:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0},
-    banchetti:{coperti:0,contanti:0,pos:0,asporto:0,servizio:0,bancone:0}
+    data: todayStr(), note:"",
+    pranzo: emptyService(),
+    cena: emptyService(),
+    banchettiList: [emptyService({ nome:"Banchetto 1" })],
+    supplierPayments: [],
+    employeePayments: [],
+    casse: { contanti:0, pos:0 }
   });
 }
 
@@ -689,6 +822,7 @@ async function openCompany(companyId) {
   seedFields();
   resetCashMovementForm();
   await refreshData();
+  resetDailyForm();
 }
 
 
@@ -973,12 +1107,56 @@ async function clearAutoLinkedMovementsForDate(dateStr) {
   const employees = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
   if (employees.error) throw employees.error;
 }
+async function getOrCreateSupplierFromDaily(row) {
+  if (row.supplier_id) return state.suppliers.find(s => s.id === row.supplier_id) || null;
+  const name = String(row.new_supplier_name || "").trim();
+  if (!name) return null;
+  const existing = state.suppliers.find(s => String(s.nome || "").toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  const { data, error } = await supabase.from("suppliers").insert({
+    company_id: state.activeCompany.id,
+    nome: name,
+    aliases: [],
+    sospeso_iniziale: 0,
+  }).select("*").single();
+  if (error) throw error;
+  state.suppliers.push(data);
+  return data;
+}
+async function getOrCreateEmployeeFromDaily(row) {
+  if (row.employee_id) return state.employees.find(e => e.id === row.employee_id) || null;
+  const name = String(row.new_employee_name || "").trim();
+  if (!name) return null;
+  const existing = state.employees.find(e => String(e.nome || "").toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  const { data, error } = await supabase.from("employees").insert({
+    company_id: state.activeCompany.id,
+    nome: name,
+    ruolo: "",
+    dovuto_mensile: 0,
+  }).select("*").single();
+  if (error) throw error;
+  state.employees.push(data);
+  return data;
+}
 async function syncDailyLinkedMovements(rec) {
   const prefix = dailyAutoPrefix(rec.data);
   await clearAutoLinkedMovementsForDate(rec.data);
 
-  const supplierRows = (rec.supplierPayments || []).filter(p => p.supplier_id && n(p.importo) > 0);
-  const employeeRows = (rec.employeePayments || []).filter(p => p.employee_id && n(p.importo) > 0);
+  const supplierRows = [];
+  for (const p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name) && n(p.importo) > 0)) {
+    const supplier = await getOrCreateSupplierFromDaily(p);
+    if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome });
+  }
+
+  const employeeRows = [];
+  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name) && n(p.importo) > 0)) {
+    const employee = await getOrCreateEmployeeFromDaily(p);
+    if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
+  }
+
+  rec.supplierPayments = supplierRows;
+  rec.employeePayments = employeeRows;
 
   if (supplierRows.length) {
     const supplierMovements = supplierRows.map(p => ({
@@ -994,19 +1172,16 @@ async function syncDailyLinkedMovements(rec) {
     const { error } = await supabase.from("supplier_movements").insert(supplierMovements);
     if (error) throw error;
 
-    const cashMovements = supplierRows.map(p => {
-      const supplier = state.suppliers.find(s => s.id === p.supplier_id);
-      return {
-        company_id: state.activeCompany.id,
-        data: dateFromDateTimeOrDate(p.operated_at, rec.data),
-        cassa: p.cassa || "contanti",
-        tipo: "uscita",
-        importo: n(p.importo),
-        operated_at: cleanDateTimeLocal(p.operated_at),
-        saved_at: new Date().toISOString(),
-        descrizione: `${prefix} Pagamento fornitore ${supplier?.nome || ""}${p.nota ? " · " + p.nota : ""}`,
-      };
-    });
+    const cashMovements = supplierRows.map(p => ({
+      company_id: state.activeCompany.id,
+      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      cassa: p.cassa || "contanti",
+      tipo: "uscita",
+      importo: n(p.importo),
+      operated_at: cleanDateTimeLocal(p.operated_at),
+      saved_at: new Date().toISOString(),
+      descrizione: `${prefix} Pagamento fornitore ${p.supplier_name || ""}${p.nota ? " · " + p.nota : ""}`,
+    }));
     const cashResult = await supabase.from("cash_movements").insert(cashMovements);
     if (cashResult.error) throw cashResult.error;
   }
@@ -1025,19 +1200,16 @@ async function syncDailyLinkedMovements(rec) {
     const { error } = await supabase.from("employee_movements").insert(employeeMovements);
     if (error) throw error;
 
-    const cashMovements = employeeRows.map(p => {
-      const employee = state.employees.find(e => e.id === p.employee_id);
-      return {
-        company_id: state.activeCompany.id,
-        data: dateFromDateTimeOrDate(p.operated_at, rec.data),
-        cassa: p.cassa || "contanti",
-        tipo: "uscita",
-        importo: n(p.importo),
-        operated_at: cleanDateTimeLocal(p.operated_at),
-        saved_at: new Date().toISOString(),
-        descrizione: `${prefix} ${p.tipo || "acconto"} dipendente ${employee?.nome || ""}${p.nota ? " · " + p.nota : ""}`,
-      };
-    });
+    const cashMovements = employeeRows.map(p => ({
+      company_id: state.activeCompany.id,
+      data: dateFromDateTimeOrDate(p.operated_at, rec.data),
+      cassa: p.cassa || "contanti",
+      tipo: "uscita",
+      importo: n(p.importo),
+      operated_at: cleanDateTimeLocal(p.operated_at),
+      saved_at: new Date().toISOString(),
+      descrizione: `${prefix} ${p.tipo || "acconto"} dipendente ${p.employee_name || ""}${p.nota ? " · " + p.nota : ""}`,
+    }));
     const cashResult = await supabase.from("cash_movements").insert(cashMovements);
     if (cashResult.error) throw cashResult.error;
   }
@@ -1046,9 +1218,12 @@ async function persistDailyRecord(rec) {
   try {
     const savedAt = new Date().toISOString();
     rec.saved_at = savedAt;
-    const { error } = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
-    if (error) throw error;
+    const first = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
+    if (first.error) throw first.error;
     await syncDailyLinkedMovements(rec);
+    // Risalva la scheda dopo aver creato eventuali nuovi fornitori/dipendenti dalla scheda giornaliera.
+    const second = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
+    if (second.error) throw second.error;
     return true;
   } catch (err) {
     showGlobalMessage(err.message || String(err), "error");
@@ -1394,7 +1569,8 @@ function openAlertModalByDate(dateStr) {
   if (safeEl("alertReasons")) $("alertReasons").innerHTML = alerts.length ? alerts.map(a => `<div class="item"><div><strong>Alert</strong><small>${a}</small></div></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
   if (safeEl("alertQuickSummary")) $("alertQuickSummary").innerHTML = [
     ["Coperti totali", totals.totalCoperti],
-    ["Coperti ristorante", rec.copertiRistorante ?? 0],
+    ["Coperti ristorante", dailyMetricTotal(rec, "copertiRistorante")],
+    ["Pizze", dailyMetricTotal(rec, "pizze")],
     ["Incasso totale", euro(totals.totalIncasso)],
   ].map(([t,v]) => `<div class="item"><div><strong>${t}</strong></div><div>${v}</div></div>`).join("");
   safeEl("alertModal")?.classList.remove("hidden");
@@ -1451,8 +1627,8 @@ function renderDailyTable() {
       <td>${formatSavedAt(r)}</td>
       <td>${totals.totalCoperti}</td>
       <td>${euro(totals.totalIncasso)}${totals.totalCommissioni ? `<br><small>netto ${euro(totals.totalIncassoNetto)} · SumUp ${euro(totals.totalCommissioni)}</small>` : ""}</td>
-      <td>${r.pizze}</td>
-      <td>${r.menu} / ${r.supplementi}</td>
+      <td>${dailyMetricTotal(r, "pizze")}</td>
+      <td>${dailyMetricTotal(r, "menu")} / ${dailyMetricTotal(r, "supplementi")}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}">Alert</button>` : '<span class="ok">OK</span>'}
         <button class="btn ghost day-delete-btn" data-day-date="${r.data}">Cancella</button>
@@ -1639,44 +1815,75 @@ function recordsInRange(from, to) {
   return state.dailyRecords.filter(r => (!range.from || r.data >= range.from) && (!range.to || r.data <= range.to));
 }
 function renderReportFromRecords(records, label = "") {
-  let copPranzo=0,copCena=0,copBanchetti=0,incasso=0,incassoNetto=0,commissioni=0,asporto=0,bancone=0,pizze=0,menu=0,supp=0,portate=0,servizioPranzo=0,servizioCena=0,servizioBanchetti=0;
+  const servizioTotali = {
+    pranzo: emptyService(),
+    cena: emptyService(),
+    banchetti: emptyService(),
+    totale: emptyService()
+  };
+  let incasso=0, incassoNetto=0, commissioni=0, asporto=0, bancone=0, servizioPranzo=0, servizioCena=0, servizioBanchetti=0;
   const cashTotals = {};
   const cashGrossTotals = {};
   const cashFees = {};
   cashNames().forEach(c => { cashTotals[c] = 0; cashGrossTotals[c] = 0; cashFees[c] = 0; });
-  records.forEach(r=>{
-    copPranzo += n(r.pranzo?.coperti); copCena += n(r.cena?.coperti); copBanchetti += n(r.banchetti?.coperti);
-    servizioPranzo += serviceAmount(r, "pranzo"); servizioCena += serviceAmount(r, "cena"); servizioBanchetti += serviceAmount(r, "banchetti");
+
+  function addToServiceBucket(bucket, service) {
+    SERVICE_NUMBER_FIELDS.forEach(field => { bucket[field] += n(service?.[field]); servizioTotali.totale[field] += n(service?.[field]); });
+  }
+
+  records.forEach(r => {
+    const pranzo = getService(r, "pranzo");
+    const cena = getService(r, "cena");
+    const banchetti = getBanchettiAggregate(r);
+    addToServiceBucket(servizioTotali.pranzo, pranzo);
+    addToServiceBucket(servizioTotali.cena, cena);
+    addToServiceBucket(servizioTotali.banchetti, banchetti);
+
+    servizioPranzo += pranzo.servizio;
+    servizioCena += cena.servizio;
+    servizioBanchetti += banchetti.servizio;
     const totals = getDailyTotals(r);
     incasso += totals.totalIncasso;
     incassoNetto += totals.totalIncassoNetto;
     commissioni += totals.totalCommissioni;
     asporto += getDailyAsportoTotal(r);
-    bancone += getDailyBanconeTotal(r); pizze += n(r.pizze); menu += n(r.menu); supp += n(r.supplementi); portate += n(r.portate);
+    bancone += getDailyBanconeTotal(r);
     cashNames().forEach(c => {
       cashTotals[c] = n(cashTotals[c]) + getDailyCashNetAmount(r, c);
       cashGrossTotals[c] = n(cashGrossTotals[c]) + getDailyCashAmount(r, c);
       cashFees[c] = n(cashFees[c]) + getDailyCashFeeAmount(r, c);
     });
   });
-  if (safeEl("rCopPranzo")) $("rCopPranzo").textContent = copPranzo;
-  if (safeEl("rCopCena")) $("rCopCena").textContent = copCena;
-  if (safeEl("rCopBanchetti")) $("rCopBanchetti").textContent = copBanchetti;
+
+  if (safeEl("rCopPranzo")) $("rCopPranzo").textContent = servizioTotali.pranzo.coperti;
+  if (safeEl("rCopCena")) $("rCopCena").textContent = servizioTotali.cena.coperti;
+  if (safeEl("rCopBanchetti")) $("rCopBanchetti").textContent = servizioTotali.banchetti.coperti;
   if (safeEl("rIncasso")) $("rIncasso").textContent = euro(incasso);
+
+  const metricCards = [];
+  const names = [
+    ["pizze", "Pizze"],
+    ["copertiRistorante", "Coperti ristorante"],
+    ["menu", "Menù"],
+    ["supplementi", "Supplementi"],
+    ["portate", "Portate"]
+  ];
+  names.forEach(([field, title]) => {
+    metricCards.push(`<div class="card inner"><strong>${title} totali</strong><div>${servizioTotali.totale[field]}</div><small>Pranzo ${servizioTotali.pranzo[field]} · Cena ${servizioTotali.cena[field]} · Banchetti ${servizioTotali.banchetti[field]}</small></div>`);
+  });
+
   if (safeEl("reportSummary")) $("reportSummary").innerHTML = [
     `<div class="card inner"><strong>${escapeHtml(label || "Periodo")}</strong><div>${records.length} giornate</div></div>`,
-    `<div class="card inner"><strong>Coperti complessivi</strong><div>${copPranzo + copCena + copBanchetti}</div></div>`,
+    `<div class="card inner"><strong>Coperti complessivi</strong><div>${servizioTotali.totale.coperti}</div><small>Pranzo ${servizioTotali.pranzo.coperti} · Cena ${servizioTotali.cena.coperti} · Banchetti ${servizioTotali.banchetti.coperti}</small></div>`,
     `<div class="card inner"><strong>Incasso lordo</strong><div>${euro(incasso)}</div></div>`,
     `<div class="card inner"><strong>Incasso netto dopo SumUp</strong><div>${euro(incassoNetto)}</div></div>`,
     `<div class="card inner"><strong>Commissioni SumUp POS</strong><div>${euro(commissioni)}</div></div>`,
     `<div class="card inner"><strong>Asporto totale</strong><div>${euro(asporto)}</div></div>`,
-    `<div class="card inner"><strong>Pranzo</strong><div>${euro(servizioPranzo)}</div></div>`,
-    `<div class="card inner"><strong>Cena</strong><div>${euro(servizioCena)}</div></div>`,
-    `<div class="card inner"><strong>Banchetti</strong><div>${euro(servizioBanchetti)}</div></div>`,
+    `<div class="card inner"><strong>Pranzo €</strong><div>${euro(servizioPranzo)}</div></div>`,
+    `<div class="card inner"><strong>Cena €</strong><div>${euro(servizioCena)}</div></div>`,
+    `<div class="card inner"><strong>Banchetti €</strong><div>${euro(servizioBanchetti)}</div></div>`,
     `<div class="card inner"><strong>Bancone totale</strong><div>${euro(bancone)}</div></div>`,
-    `<div class="card inner"><strong>Pizze totali</strong><div>${pizze}</div></div>`,
-    `<div class="card inner"><strong>Menù / Supplementi</strong><div>${menu} / ${supp}</div></div>`,
-    `<div class="card inner"><strong>Portate</strong><div>${portate}</div></div>`,
+    ...metricCards,
     ...Object.entries(cashTotals).map(([name,total]) => {
       const extra = isPosCash(name) ? `<small>lordo ${euro(cashGrossTotals[name])} · commissioni ${euro(cashFees[name])}</small>` : "";
       return `<div class="card inner"><strong>${escapeHtml(isPosCash(name) ? "POS netto" : cashLabel(name))}</strong><div>${euro(total)}</div>${extra}</div>`;
@@ -1740,6 +1947,8 @@ function bindEvents() {
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
+  safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
+  safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
   safeEl("addDailyEmployeePaymentBtn")?.addEventListener("click", ()=>addDailyEmployeePaymentRow({}));
   safeEl("supplierDetailMonth")?.addEventListener("change", renderSupplierDetail);
