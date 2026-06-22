@@ -108,3 +108,12 @@ input[readonly]{background:#f3f4f6;cursor:not-allowed}
 .danger-soft:hover{background:rgba(255,59,48,.08);}
 .action-inline{display:flex;gap:8px;flex-wrap:wrap;}
 @media(max-width:720px){.action-inline .btn,.action-inline button{width:100%;justify-content:center;}}
+
+
+/* V14: controllo incassi per giornata */
+.daily-audit-kpis{margin:12px 0;}
+.daily-audit-table th,.daily-audit-table td{white-space:nowrap;}
+.daily-audit-bad{background:rgba(127,29,29,.16);}
+#dailyCashAuditBox .alert{margin:10px 0;}
+#renderDailyCashAuditBtn,#recalculateDailyCashBtn{white-space:nowrap;}
+@media (max-width: 700px){#renderDailyCashAuditBtn,#recalculateDailyCashBtn{width:100%;}}

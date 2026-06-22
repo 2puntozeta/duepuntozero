@@ -1166,12 +1166,147 @@ async function forceReloadFromSupabase() {
   }
 }
 
+
+function dailyCashReconciliationRows() {
+  const rows = [...(state.dailyRecords || [])].sort((a,b) => String(a.data || "").localeCompare(String(b.data || ""))).map(rec => {
+    const serviceContanti = normalizeMoney(legacyDailyCash(rec, "contanti"));
+    const servicePos = normalizeMoney(legacyDailyCash(rec, "pos"));
+    const usedContanti = normalizeMoney(getDailyCashAmount(rec, "contanti"));
+    const usedPos = normalizeMoney(getDailyCashAmount(rec, "pos"));
+    const diffContanti = normalizeMoney(usedContanti - serviceContanti);
+    const diffPos = normalizeMoney(usedPos - servicePos);
+    const usedPosNet = normalizeMoney(netAmountForCash("pos", usedPos));
+    const servicePosNet = normalizeMoney(netAmountForCash("pos", servicePos));
+    const hasCashObject = !!rec?.casse && typeof rec.casse === "object";
+    const hasDifference = !roughlySameMoney(diffContanti, 0) || !roughlySameMoney(diffPos, 0);
+    return {
+      data: rec.data,
+      serviceContanti,
+      usedContanti,
+      diffContanti,
+      servicePos,
+      usedPos,
+      diffPos,
+      servicePosNet,
+      usedPosNet,
+      hasCashObject,
+      hasDifference,
+      saved_at: rec.saved_at || rec.created_at || null,
+    };
+  });
+  const totals = rows.reduce((acc,row) => {
+    acc.serviceContanti += row.serviceContanti;
+    acc.usedContanti += row.usedContanti;
+    acc.diffContanti += row.diffContanti;
+    acc.servicePos += row.servicePos;
+    acc.usedPos += row.usedPos;
+    acc.diffPos += row.diffPos;
+    acc.servicePosNet += row.servicePosNet;
+    acc.usedPosNet += row.usedPosNet;
+    acc.differences += row.hasDifference ? 1 : 0;
+    return acc;
+  }, { serviceContanti:0, usedContanti:0, diffContanti:0, servicePos:0, usedPos:0, diffPos:0, servicePosNet:0, usedPosNet:0, differences:0 });
+  Object.keys(totals).forEach(k => { if (k !== "differences") totals[k] = normalizeMoney(totals[k]); });
+  return { rows, totals };
+}
+function renderDailyCashAudit() {
+  const box = safeEl("dailyCashAuditBox");
+  const status = safeEl("dailyCashAuditStatus");
+  if (!box) return;
+  const audit = dailyCashReconciliationRows();
+  const rowsWithDiff = audit.rows.filter(r => r.hasDifference);
+  if (status) {
+    status.textContent = rowsWithDiff.length
+      ? `Trovate ${rowsWithDiff.length} giornate dove i valori usati dal gestionale non coincidono con pranzo/cena/banchetti.`
+      : `Tutto torna: dashboard e servizi usano gli stessi incassi. Ultimo controllo: ${formatDateTime(new Date().toISOString())}`;
+  }
+  const totalsHtml = `
+    <div class="grid4 daily-audit-kpis">
+      <div class="card inner"><strong>Contanti visibili</strong><div class="metric-value small">${euro(audit.totals.serviceContanti)}</div><small>Somma pranzo + cena + banchetti</small></div>
+      <div class="card inner"><strong>Contanti usati</strong><div class="metric-value small">${euro(audit.totals.usedContanti)}</div><small>Totale usato dalla dashboard</small></div>
+      <div class="card inner"><strong>Differenza contanti</strong><div class="metric-value small ${audit.totals.diffContanti < -0.01 ? "bad" : audit.totals.diffContanti > 0.01 ? "warn" : "ok"}">${euro(audit.totals.diffContanti)}</div><small>Usato - visibile</small></div>
+      <div class="card inner"><strong>Differenza POS lordo</strong><div class="metric-value small ${audit.totals.diffPos < -0.01 ? "bad" : audit.totals.diffPos > 0.01 ? "warn" : "ok"}">${euro(audit.totals.diffPos)}</div><small>Usato - visibile</small></div>
+    </div>`;
+  const tableRows = audit.rows.map(row => {
+    const cls = row.hasDifference ? "daily-audit-bad" : "";
+    const statusLabel = row.hasDifference ? "Da correggere" : "OK";
+    return `<tr class="${cls}">
+      <td><button class="btn ghost audit-day-open-btn" data-day-date="${escapeHtml(row.data)}">${escapeHtml(row.data)}</button></td>
+      <td>${euro(row.serviceContanti)}</td>
+      <td>${euro(row.usedContanti)}</td>
+      <td class="${Math.abs(row.diffContanti) > 0.01 ? "bad" : "ok"}">${euro(row.diffContanti)}</td>
+      <td>${euro(row.servicePos)}</td>
+      <td>${euro(row.usedPos)}</td>
+      <td class="${Math.abs(row.diffPos) > 0.01 ? "bad" : "ok"}">${euro(row.diffPos)}</td>
+      <td>${statusLabel}</td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `${rowsWithDiff.length ? `<div class="alert">Attenzione: ci sono valori di chiusura cassa salvati che non coincidono con i campi visibili nei servizi. Puoi aprire la giornata oppure usare “Ricalcola chiusure da servizi”.</div>` : `<div class="alert okline">Nessuna differenza tra servizi visibili e valori usati dalla dashboard.</div>`}
+    ${totalsHtml}
+    <div class="table-wrap daily-audit-table">
+      <table>
+        <thead><tr><th>Data</th><th>Contanti visibili</th><th>Contanti usati</th><th>Diff.</th><th>POS lordo visibile</th><th>POS lordo usato</th><th>Diff.</th><th>Stato</th></tr></thead>
+        <tbody>${tableRows || `<tr><td colspan="8">Nessuna giornata registrata.</td></tr>`}</tbody>
+      </table>
+    </div>
+    <p class="muted small">Nota: per il POS il confronto è sul lordo inserito; la dashboard poi applica automaticamente SumUp 0,95% per il netto.</p>`;
+  document.querySelectorAll(".audit-day-open-btn").forEach(btn => btn.addEventListener("click", () => loadDailyByDate(btn.dataset.dayDate)));
+}
+function getDailyCashRecalculationPlan() {
+  return (state.dailyRecords || []).map(rec => {
+    const auto = autoCashFromRecord({ ...rec, casse: {} });
+    const current = { contanti: getDailyCashAmount(rec, "contanti"), pos: getDailyCashAmount(rec, "pos") };
+    return {
+      rec,
+      current: { contanti: normalizeMoney(current.contanti), pos: normalizeMoney(current.pos) },
+      auto: { contanti: normalizeMoney(auto.contanti), pos: normalizeMoney(auto.pos) },
+      diffContanti: normalizeMoney(current.contanti - auto.contanti),
+      diffPos: normalizeMoney(current.pos - auto.pos),
+    };
+  }).filter(item => !roughlySameMoney(item.diffContanti, 0) || !roughlySameMoney(item.diffPos, 0));
+}
+async function recalculateDailyCashFromServices() {
+  try {
+    const plan = getDailyCashRecalculationPlan();
+    if (!plan.length) {
+      showGlobalMessage("Nessuna chiusura da ricalcolare: i valori sono già allineati ai servizi.");
+      renderDailyCashAudit();
+      return;
+    }
+    const totalDiffContanti = normalizeMoney(plan.reduce((a,p)=>a+p.diffContanti, 0));
+    const totalDiffPos = normalizeMoney(plan.reduce((a,p)=>a+p.diffPos, 0));
+    const preview = plan.slice(0, 8).map(p => `- ${p.rec.data}: contanti ${euro(p.current.contanti)} → ${euro(p.auto.contanti)}, POS ${euro(p.current.pos)} → ${euro(p.auto.pos)}`).join("\n");
+    const more = plan.length > 8 ? `\n- altre ${plan.length - 8} giornate...` : "";
+    const ok = confirm(`Ricalcolo chiusura cassa da pranzo/cena/banchetti per ${plan.length} giornate?\n\nDifferenza contanti totale: ${euro(totalDiffContanti)}\nDifferenza POS lordo totale: ${euro(totalDiffPos)}\n\n${preview}${more}\n\nNon cancella movimenti di fornitori/dipendenti: aggiorna solo i valori contanti/POS della chiusura cassa nelle schede giornaliere.`);
+    if (!ok) return;
+    const savedAt = new Date().toISOString();
+    for (const item of plan) {
+      const rec = JSON.parse(JSON.stringify(item.rec));
+      rec.casse = { ...(rec.casse || {}), contanti: item.auto.contanti, pos: item.auto.pos };
+      rec.saved_at = savedAt;
+      const { error } = await supabase.from("daily_records").upsert({
+        company_id: state.activeCompany.id,
+        data: rec.data,
+        payload: rec,
+        saved_at: savedAt,
+      }, { onConflict: "company_id,data" });
+      if (error) throw error;
+    }
+    await refreshData(`Chiusure cassa ricalcolate da servizi: ${plan.length} giornate aggiornate.`);
+    renderDailyCashAudit();
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage(err.message || String(err), "error");
+  }
+}
+
 function auditSnapshot() {
   const issues = runAccountingChecks();
   return {
     generated_at: new Date().toISOString(),
     company: state.activeCompany,
     cash_breakdown: computeCashBreakdown(),
+    daily_cash_audit: dailyCashReconciliationRows(),
     issues,
     counts: {
       daily_records: state.dailyRecords.length,
@@ -2758,6 +2893,7 @@ function renderDashboard() {
     }).join("") || `<div class="alert">Nessuna cassa presente.</div>`;
   }
   renderLiveChecks();
+  if (safeEl("dailyCashAuditBox") && safeEl("dailyCashAuditBox").innerHTML.trim()) renderDailyCashAudit();
 }
 
 function renderDailyTable() {
@@ -3159,6 +3295,8 @@ function bindEvents() {
   safeEl("cleanupSafeBtn")?.addEventListener("click", cleanupSafeDuplicates);
   safeEl("runCloudSyncBtn")?.addEventListener("click", () => runCloudUiSyncCheck(false));
   safeEl("forceCloudReloadBtn")?.addEventListener("click", forceReloadFromSupabase);
+  safeEl("renderDailyCashAuditBtn")?.addEventListener("click", renderDailyCashAudit);
+  safeEl("recalculateDailyCashBtn")?.addEventListener("click", recalculateDailyCashFromServices);
   safeEl("backupBtn")?.addEventListener("click", exportBackup);
   safeEl("importBackupBtn")?.addEventListener("click", () => safeEl("importFile")?.click());
   safeEl("importFile")?.addEventListener("change", (e)=>e.target.files[0] && importBackup(e.target.files[0]));
