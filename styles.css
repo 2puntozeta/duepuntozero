@@ -94,3 +94,12 @@ input[readonly]{background:#f3f4f6;cursor:not-allowed}
   .activity-row,.check-row{flex-direction:column;align-items:stretch}
   .activity-amount{text-align:left}
 }
+/* V11: diagnostica doppioni/orfani */
+.bad-pill{background:#7f1d1d!important;color:#fff!important}
+#exportDiagnosticsBtn{white-space:nowrap}
+@media (max-width: 700px){#exportDiagnosticsBtn{width:100%}}
+
+/* V12: controllo Supabase / sito */
+#cloudSyncBox .item small{display:block;margin-top:4px;color:#94a3b8;line-height:1.35}
+#runCloudSyncBtn,#forceCloudReloadBtn{white-space:nowrap}
+@media (max-width: 700px){#runCloudSyncBtn,#forceCloudReloadBtn{width:100%}}

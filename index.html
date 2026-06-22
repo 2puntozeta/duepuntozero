@@ -171,10 +171,29 @@
           <div class="card">
             <div class="toolbar">
               <h3>Verifica contabile continua</h3>
-              <div id="lastVerificationAt" class="muted small"></div>
+              <div class="toolbar">
+                <div id="lastVerificationAt" class="muted small"></div>
+                <button id="exportDiagnosticsBtn" class="secondary" type="button">Scarica diagnostica</button>
+              </div>
             </div>
+            <p class="muted small">Controlla doppioni, movimenti orfani, uscite cassa non collegate e residui dopo cancellazioni.</p>
             <div id="accountingCheckBox"></div>
           </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="toolbar">
+            <div>
+              <h3>Controllo Supabase / sito</h3>
+              <p class="muted small" style="margin:4px 0 0 0;">Verifica che quello che conta la cassa sia presente sia nei dati caricati dal sito sia nel database Supabase.</p>
+            </div>
+            <div class="toolbar">
+              <button id="runCloudSyncBtn" class="secondary" type="button">Controlla ora</button>
+              <button id="forceCloudReloadBtn" class="secondary" type="button">Ricarica da Supabase</button>
+            </div>
+          </div>
+          <div id="cloudSyncStatus" class="muted small" style="margin-top:8px;">Controllo non ancora eseguito.</div>
+          <div id="cloudSyncBox" style="margin-top:10px;"></div>
         </div>
       </section>
 
@@ -390,7 +409,7 @@
               <h3 id="supplierDetailTitle">Scheda fornitore</h3>
               <p id="supplierDetailSubtitle" class="muted small"></p>
             </div>
-            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="supplierDetailMonth" type="month" /></div>
+            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="supplierDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
           </div>
           <div class="grid4" id="supplierDetailKpis"></div>
           <div class="card inner">
@@ -464,7 +483,7 @@
               <h3 id="employeeDetailTitle">Scheda dipendente</h3>
               <p id="employeeDetailSubtitle" class="muted small"></p>
             </div>
-            <div class="field" style="min-width:180px;"><label>Mese</label><input id="employeeDetailMonth" type="month" /></div>
+            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="employeeDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
           </div>
           <div class="grid4" id="employeeDetailKpis"></div>
           <div class="card inner">
