@@ -103,3 +103,8 @@ input[readonly]{background:#f3f4f6;cursor:not-allowed}
 #cloudSyncBox .item small{display:block;margin-top:4px;color:#94a3b8;line-height:1.35}
 #runCloudSyncBtn,#forceCloudReloadBtn{white-space:nowrap}
 @media (max-width: 700px){#runCloudSyncBtn,#forceCloudReloadBtn{width:100%}}
+
+.danger-soft{border-color:rgba(255,59,48,.35);color:#ff6b61;}
+.danger-soft:hover{background:rgba(255,59,48,.08);}
+.action-inline{display:flex;gap:8px;flex-wrap:wrap;}
+@media(max-width:720px){.action-inline .btn,.action-inline button{width:100%;justify-content:center;}}

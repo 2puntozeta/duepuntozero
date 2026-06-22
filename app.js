@@ -1283,6 +1283,178 @@ function runAccountingChecks() {
   });
   return issues;
 }
+
+
+function safeSortRowsForCleanup(rows) {
+  return [...(rows || [])].sort((a,b) => {
+    const av = `${a.saved_at || a.created_at || ""}|${a.id || ""}`;
+    const bv = `${b.saved_at || b.created_at || ""}|${b.id || ""}`;
+    return av.localeCompare(bv);
+  });
+}
+function cleanupDuplicateGroups(rows, keyFn) {
+  return duplicateGroups(rows, keyFn).map(group => {
+    const sorted = safeSortRowsForCleanup(group);
+    return { keep: sorted[0], remove: sorted.slice(1) };
+  }).filter(g => g.remove.length);
+}
+function getDuplicateCleanupCandidates() {
+  const supplierGroups = cleanupDuplicateGroups((state.supplierMovements || []), m => [m.supplier_id, m.data, m.tipo, normalizeMoney(m.importo), normalizeSearchText(businessMovementCash(m)), normalizeSearchText(cleanMovementNoteForForm(m.nota)), cleanDateTimeLocal(m.operated_at)].join("|"));
+  const employeeGroups = cleanupDuplicateGroups((state.employeeMovements || []), m => [m.employee_id, m.data, m.tipo, normalizeMoney(m.importo), normalizeSearchText(businessMovementCash(m)), normalizeSearchText(cleanMovementNoteForForm(m.nota)), cleanDateTimeLocal(m.operated_at)].join("|"));
+  const cashGroups = cleanupDuplicateGroups((state.cashMovements || []), m => [m.data, m.tipo, normalizeSearchText(m.cassa), normalizeMoney(m.importo), normalizeSearchText(m.descrizione || "")].join("|"));
+  return {
+    supplierDuplicateIds: supplierGroups.flatMap(g => g.remove.map(x => x.id).filter(Boolean)),
+    employeeDuplicateIds: employeeGroups.flatMap(g => g.remove.map(x => x.id).filter(Boolean)),
+    cashDuplicateIds: cashGroups.flatMap(g => g.remove.map(x => x.id).filter(Boolean)),
+    supplierDuplicateGroups: supplierGroups,
+    employeeDuplicateGroups: employeeGroups,
+    cashDuplicateGroups: cashGroups,
+  };
+}
+function cashOutMatchesBusinessLoose(c, kind, movement) {
+  if (!c || !movement) return false;
+  if (c.tipo !== "uscita") return false;
+  if (String(c.data || "") !== String(movement.data || "")) return false;
+  if (!roughlySameMoney(c.importo, movement.importo)) return false;
+  if (normalizeSearchText(c.cassa || "contanti") !== normalizeSearchText(businessMovementCash(movement) || "contanti")) return false;
+  const descr = normalizeSearchText(c.descrizione || "");
+  if (isDailyAutoMovement(movement) && isDailyAutoLinkedMovement(c, movement.data)) return true;
+  return descr.includes(kind === "supplier" ? "fornitore" : "dipendente");
+}
+function getOrphanCleanupCandidates() {
+  const supplierIds = new Set((state.suppliers || []).map(s => String(s.id)));
+  const employeeIds = new Set((state.employees || []).map(e => String(e.id)));
+  const orphanSupplierMovements = (state.supplierMovements || []).filter(m => m.supplier_id && !supplierIds.has(String(m.supplier_id)));
+  const orphanEmployeeMovements = (state.employeeMovements || []).filter(m => m.employee_id && !employeeIds.has(String(m.employee_id)));
+  const linkedCashIds = new Set();
+  orphanSupplierMovements.filter(m => isSupplierPaymentType(m.tipo)).forEach(m => {
+    (state.cashMovements || []).filter(c => cashOutMatchesBusinessLoose(c, "supplier", m)).forEach(c => c.id && linkedCashIds.add(c.id));
+  });
+  orphanEmployeeMovements.forEach(m => {
+    (state.cashMovements || []).filter(c => cashOutMatchesBusinessLoose(c, "employee", m)).forEach(c => c.id && linkedCashIds.add(c.id));
+  });
+  const orphanCashMovements = (state.cashMovements || []).filter(c => c.id && cashMovementLooksBusinessRelated(c) && !cashMovementHasAnyBusinessMatch(c));
+  orphanCashMovements.forEach(c => c.id && linkedCashIds.add(c.id));
+  return {
+    orphanSupplierMovementIds: orphanSupplierMovements.map(m => m.id).filter(Boolean),
+    orphanEmployeeMovementIds: orphanEmployeeMovements.map(m => m.id).filter(Boolean),
+    orphanCashMovementIds: [...linkedCashIds],
+    orphanSupplierMovements,
+    orphanEmployeeMovements,
+    orphanCashMovements,
+  };
+}
+function getDailyPayloadCleanupCandidates() {
+  const supplierIds = new Set((state.suppliers || []).map(s => String(s.id)));
+  const employeeIds = new Set((state.employees || []).map(e => String(e.id)));
+  const supplierMovementIds = new Set((state.supplierMovements || []).map(m => String(m.id)));
+  const employeeMovementIds = new Set((state.employeeMovements || []).map(m => String(m.id)));
+  const updates = [];
+  (state.dailyRecords || []).forEach(rec => {
+    const copy = JSON.parse(JSON.stringify(rec));
+    const beforeSupplier = copy.supplierPayments || [];
+    const beforeEmployee = copy.employeePayments || [];
+    copy.supplierPayments = beforeSupplier.filter(row => {
+      if (row.supplier_id && !supplierIds.has(String(row.supplier_id))) return false;
+      if (row.source_id && !supplierMovementIds.has(String(row.source_id))) return false;
+      return true;
+    });
+    copy.employeePayments = beforeEmployee.filter(row => {
+      if (row.employee_id && !employeeIds.has(String(row.employee_id))) return false;
+      if (row.source_id && !employeeMovementIds.has(String(row.source_id))) return false;
+      return true;
+    });
+    if (copy.supplierPayments.length !== beforeSupplier.length || copy.employeePayments.length !== beforeEmployee.length) updates.push(copy);
+  });
+  return updates;
+}
+function cleanupPlanSummary() {
+  const d = getDuplicateCleanupCandidates();
+  const o = getOrphanCleanupCandidates();
+  const dailyUpdates = getDailyPayloadCleanupCandidates();
+  return {
+    supplierDuplicates: d.supplierDuplicateIds.length,
+    employeeDuplicates: d.employeeDuplicateIds.length,
+    cashDuplicates: d.cashDuplicateIds.length,
+    orphanSuppliers: o.orphanSupplierMovementIds.length,
+    orphanEmployees: o.orphanEmployeeMovementIds.length,
+    orphanCash: o.orphanCashMovementIds.length,
+    dailyRecordsToFix: dailyUpdates.length,
+    duplicate: d,
+    orphan: o,
+    dailyUpdates,
+  };
+}
+async function cleanupSafeDuplicates() {
+  try {
+    const plan = cleanupPlanSummary();
+    const total = plan.supplierDuplicates + plan.employeeDuplicates + plan.cashDuplicates + plan.orphanSuppliers + plan.orphanEmployees + plan.orphanCash + plan.dailyRecordsToFix;
+    if (!total) {
+      showGlobalMessage("Non ci sono duplicati sicuri o residui orfani da rimuovere.");
+      return;
+    }
+    const msg = `Pulizia controllata:\n\n` +
+      `- doppioni movimenti fornitori: ${plan.supplierDuplicates}\n` +
+      `- doppioni movimenti dipendenti: ${plan.employeeDuplicates}\n` +
+      `- doppioni movimenti cassa: ${plan.cashDuplicates}\n` +
+      `- movimenti fornitore orfani: ${plan.orphanSuppliers}\n` +
+      `- movimenti dipendente orfani: ${plan.orphanEmployees}\n` +
+      `- uscite cassa orfane/collegate a residui: ${plan.orphanCash}\n` +
+      `- schede giornaliere da ripulire: ${plan.dailyRecordsToFix}\n\n` +
+      `Verranno rimossi solo doppioni identici e residui collegati a fornitori/dipendenti eliminati. Prima assicurati di aver scaricato la diagnostica. Procedo?`;
+    if (!confirm(msg)) return;
+
+    const deleteIds = async (table, ids) => {
+      const clean = [...new Set((ids || []).filter(Boolean).map(String))];
+      if (!clean.length) return;
+      const { error } = await supabase.from(table).delete().eq("company_id", state.activeCompany.id).in("id", clean);
+      if (error) throw error;
+    };
+
+    const cashIds = [...new Set([...(plan.duplicate.cashDuplicateIds || []), ...(plan.orphan.orphanCashMovementIds || [])])];
+    await deleteIds("cash_movements", cashIds);
+    await deleteIds("supplier_movements", [...(plan.duplicate.supplierDuplicateIds || []), ...(plan.orphan.orphanSupplierMovementIds || [])]);
+    await deleteIds("employee_movements", [...(plan.duplicate.employeeDuplicateIds || []), ...(plan.orphan.orphanEmployeeMovementIds || [])]);
+    for (const rec of plan.dailyUpdates) {
+      await upsertDailyRecordPayload(rec);
+    }
+    await refreshData("Pulizia completata. Ho ricaricato i dati da Supabase e rifatto i controlli.");
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage(err.message || String(err), "error");
+  }
+}
+async function deleteSupplierMovementById(id) {
+  const m = (state.supplierMovements || []).find(x => String(x.id) === String(id));
+  if (!m) return;
+  const supplier = (state.suppliers || []).find(s => s.id === m.supplier_id);
+  if (!confirm(`Vuoi eliminare questo movimento fornitore?\n\n${supplier?.nome || "Fornitore"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nSe è un pagamento/acconto, verrà eliminata anche una uscita cassa collegata.`)) return;
+  try {
+    if (isSupplierPaymentType(m.tipo)) {
+      const matches = getMatchingCashOutMovementsForBusiness("supplier", m).sort((a,b) => (b.saved_at || b.created_at || "").localeCompare(a.saved_at || a.created_at || ""));
+      if (matches[0]?.id) await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("id", matches[0].id);
+    }
+    if (isDailyAutoMovement(m)) await syncDailyPayloadAfterMovementEdit("supplier", m, {}, { keepInDaily: false });
+    const { error } = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("id", m.id);
+    if (error) throw error;
+    await refreshData("Movimento fornitore eliminato e cassa aggiornata.");
+  } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
+}
+async function deleteEmployeeMovementById(id) {
+  const m = (state.employeeMovements || []).find(x => String(x.id) === String(id));
+  if (!m) return;
+  const employee = (state.employees || []).find(e => e.id === m.employee_id);
+  if (!confirm(`Vuoi eliminare questo movimento dipendente?\n\n${employee?.nome || "Dipendente"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nVerrà eliminata anche una uscita cassa collegata.`)) return;
+  try {
+    const matches = getMatchingCashOutMovementsForBusiness("employee", m).sort((a,b) => (b.saved_at || b.created_at || "").localeCompare(a.saved_at || a.created_at || ""));
+    if (matches[0]?.id) await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("id", matches[0].id);
+    if (isDailyAutoMovement(m)) await syncDailyPayloadAfterMovementEdit("employee", m, {}, { keepInDaily: false });
+    const { error } = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("id", m.id);
+    if (error) throw error;
+    await refreshData("Movimento dipendente eliminato e cassa aggiornata.");
+  } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
+}
+
 function renderAccountingCheck() {
   const box = safeEl("accountingCheckBox");
   if (!box) return;
@@ -1292,7 +1464,10 @@ function renderAccountingCheck() {
     box.innerHTML = `<div class="alert okline">Tutto torna: entrate, uscite, schede giornaliere, doppioni e movimenti orfani risultano coerenti.</div>`;
     return;
   }
-  box.innerHTML = `<div class="alert">Trovati ${issues.length} controlli da verificare. Prima di eliminare dati, controlla le righe sotto o scarica la diagnostica.</div>` + issues.slice(0, 16).map(issue => `
+  const plan = cleanupPlanSummary();
+  const cleanupTotal = plan.supplierDuplicates + plan.employeeDuplicates + plan.cashDuplicates + plan.orphanSuppliers + plan.orphanEmployees + plan.orphanCash + plan.dailyRecordsToFix;
+  const cleanupBox = cleanupTotal ? `<div class="alert">Pulizia disponibile: ${cleanupTotal} elementi sicuri da correggere/rimuovere. Usa “Scarica diagnostica” prima di premere “Rimuovi duplicati sicuri”.</div>` : "";
+  box.innerHTML = `<div class="alert">Trovati ${issues.length} controlli da verificare. Prima di eliminare dati, controlla le righe sotto o scarica la diagnostica.</div>` + cleanupBox + issues.slice(0, 16).map(issue => `
     <div class="item check-row ${issue.level === "warn" ? "check-warn" : "check-bad"}">
       <div>
         <strong>${escapeHtml(issue.title)}</strong>
@@ -2705,9 +2880,10 @@ function renderSupplierDetail() {
       <td>${typeLabel(m.tipo)}${isDailyAutoMovement(m) ? ' <span class="pill">scheda giornaliera</span>' : ''}${!state.suppliers.some(x => x.id === m.supplier_id) ? ' <span class="pill bad-pill">orfano</span>' : ''}</td>
       <td>${euro(m.importo)}</td>
       <td>${escapeHtml(cleanMovementNoteForForm(m.nota) || "")}</td>
-      <td><button class="btn ghost supplier-movement-edit-btn" data-movement-id="${m.id}">Modifica</button></td>
+      <td><div class="action-inline"><button class="btn ghost supplier-movement-edit-btn" data-movement-id="${m.id}">Modifica</button><button class="btn ghost supplier-movement-delete-btn" data-movement-id="${m.id}">Elimina</button></div></td>
     </tr>`).join("") || '<tr><td colspan="7">Nessun movimento</td></tr>';
     document.querySelectorAll(".supplier-movement-edit-btn").forEach(btn => btn.addEventListener("click", () => startSupplierMovementEdit(btn.dataset.movementId)));
+    document.querySelectorAll(".supplier-movement-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteSupplierMovementById(btn.dataset.movementId)));
   }
 }
 function renderEmployees() {
@@ -2775,9 +2951,10 @@ function renderEmployeeDetail() {
       <td>${typeLabel(m.tipo)}${isDailyAutoMovement(m) ? ' <span class="pill">scheda giornaliera</span>' : ''}${!state.employees.some(x => x.id === m.employee_id) ? ' <span class="pill bad-pill">orfano</span>' : ''}</td>
       <td>${euro(m.importo)}</td>
       <td>${escapeHtml(cleanMovementNoteForForm(m.nota) || "")}</td>
-      <td><button class="btn ghost employee-movement-edit-btn" data-movement-id="${m.id}">Modifica</button></td>
+      <td><div class="action-inline"><button class="btn ghost employee-movement-edit-btn" data-movement-id="${m.id}">Modifica</button><button class="btn ghost employee-movement-delete-btn" data-movement-id="${m.id}">Elimina</button></div></td>
     </tr>`).join("") || '<tr><td colspan="7">Nessun movimento</td></tr>';
     document.querySelectorAll(".employee-movement-edit-btn").forEach(btn => btn.addEventListener("click", () => startEmployeeMovementEdit(btn.dataset.movementId)));
+    document.querySelectorAll(".employee-movement-delete-btn").forEach(btn => btn.addEventListener("click", () => deleteEmployeeMovementById(btn.dataset.movementId)));
   }
 }
 function renderBookings() {
@@ -2979,6 +3156,7 @@ function bindEvents() {
   safeEl("employeeDetailMonth")?.addEventListener("change", renderEmployeeDetail);
   safeEl("refreshBtn")?.addEventListener("click", ()=>refreshData("Dati aggiornati dal cloud."));
   safeEl("exportDiagnosticsBtn")?.addEventListener("click", exportDiagnostics);
+  safeEl("cleanupSafeBtn")?.addEventListener("click", cleanupSafeDuplicates);
   safeEl("runCloudSyncBtn")?.addEventListener("click", () => runCloudUiSyncCheck(false));
   safeEl("forceCloudReloadBtn")?.addEventListener("click", forceReloadFromSupabase);
   safeEl("backupBtn")?.addEventListener("click", exportBackup);
