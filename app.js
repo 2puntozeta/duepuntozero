@@ -78,6 +78,7 @@ const isSupervisor = () => state.profile?.global_role === "supervisor";
 
 const REMEMBER_EMAIL_KEY = "gestionale_remember_email";
 const REMEMBER_EMAIL_VALUE_KEY = "gestionale_remember_email_value";
+const POS_SUMUP_FEE_RATE = 0.0095; // Commissione SumUp: 0,95% sugli incassi POS
 
 function loadRememberedEmail() {
   try {
@@ -162,23 +163,57 @@ function cashNames() {
   const custom = (state.customCashes || []).map(c => c.name).filter(Boolean);
   return ["contanti", "pos", ...custom.filter(name => !["contanti", "pos"].includes(String(name).toLowerCase()))];
 }
+function cashLabel(name) {
+  if (name === "contanti") return "Contanti";
+  if (name === "pos") return "POS";
+  return name || "—";
+}
+function isPosCash(name) {
+  return String(name || "").toLowerCase() === "pos";
+}
+function sumupFee(amount) {
+  return Math.round(n(amount) * POS_SUMUP_FEE_RATE * 100) / 100;
+}
+function netAmountForCash(cassa, amount) {
+  const gross = n(amount);
+  return isPosCash(cassa) ? Math.max(0, gross - sumupFee(gross)) : gross;
+}
 function legacyDailyCash(rec, cassa) {
   if (cassa === "contanti") return n(rec.pranzo?.contanti)+n(rec.cena?.contanti)+n(rec.banchetti?.contanti);
   if (cassa === "pos") return n(rec.pranzo?.pos)+n(rec.cena?.pos)+n(rec.banchetti?.pos);
   return 0;
 }
+// Importo lordo inserito nella scheda giornaliera.
 function getDailyCashAmount(rec, cassa) {
   if (rec?.casse && Object.prototype.hasOwnProperty.call(rec.casse, cassa)) return n(rec.casse[cassa]);
   return legacyDailyCash(rec || {}, cassa);
 }
-function getDailyCashTotal(rec) {
+function getDailyCashFeeAmount(rec, cassa) {
+  const gross = getDailyCashAmount(rec, cassa);
+  return isPosCash(cassa) ? sumupFee(gross) : 0;
+}
+function getDailyCashNetAmount(rec, cassa) {
+  return netAmountForCash(cassa, getDailyCashAmount(rec, cassa));
+}
+function getDailyCashTotalGross(rec) {
   if (rec?.casse && typeof rec.casse === "object") return Object.values(rec.casse).reduce((a,b)=>a+n(b),0);
   return legacyDailyCash(rec || {}, "contanti") + legacyDailyCash(rec || {}, "pos");
 }
+function getDailyCashTotalFee(rec) {
+  return cashNames().reduce((a,cassa)=>a+getDailyCashFeeAmount(rec, cassa), 0);
+}
+function getDailyCashTotalNet(rec) {
+  return cashNames().reduce((a,cassa)=>a+getDailyCashNetAmount(rec, cassa), 0);
+}
+function getDailyCashTotal(rec) {
+  return getDailyCashTotalGross(rec);
+}
 function getDailyTotals(rec) {
-  const totalIncasso = getDailyCashTotal(rec);
+  const totalIncasso = getDailyCashTotalGross(rec);
+  const totalCommissioni = getDailyCashTotalFee(rec);
+  const totalIncassoNetto = getDailyCashTotalNet(rec);
   const totalCoperti = n(rec.pranzo?.coperti)+n(rec.cena?.coperti)+n(rec.banchetti?.coperti);
-  return { totalIncasso, totalCoperti };
+  return { totalIncasso, totalIncassoNetto, totalCommissioni, totalCoperti };
 }
 function getCurrentMonthPrefix() { return todayStr().slice(0, 7); }
 function monthMatches(dateStr, monthPrefix) { return !monthPrefix || String(dateStr || "").startsWith(monthPrefix); }
@@ -210,8 +245,9 @@ function renderDailyCashInputs(rec = null) {
   box.querySelectorAll("input[data-daily-cash]").forEach(input => currentValues[input.dataset.dailyCash] = input.value);
   box.innerHTML = cashNames().map(name => {
     const value = rec ? getDailyCashAmount(rec, name) : (currentValues[name] ?? 0);
-    const label = name === "contanti" ? "Contanti" : name === "pos" ? "POS" : name;
-    return `<div class="field"><label>${escapeHtml(label)}</label><input data-daily-cash="${escapeHtml(name)}" type="number" step="0.01" value="${value}" /></div>`;
+    const label = isPosCash(name) ? "POS lordo" : cashLabel(name);
+    const note = isPosCash(name) ? `<small class="muted">SumUp: viene tolto automaticamente lo 0,95% nel saldo cassa.</small>` : "";
+    return `<div class="field"><label>${escapeHtml(label)}</label><input data-daily-cash="${escapeHtml(name)}" type="number" step="0.01" value="${value}" />${note}</div>`;
   }).join("");
 }
 function collectDailyCashFromForm() {
@@ -233,7 +269,7 @@ function collectDailyCashFromForm() {
   return values;
 }
 function cashSelectOptions(selected = "contanti") {
-  return cashNames().map(name => `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(name === "contanti" ? "Contanti" : name === "pos" ? "POS" : name)}</option>`).join("");
+  return cashNames().map(name => `<option value="${escapeHtml(name)}" ${name === selected ? "selected" : ""}>${escapeHtml(cashLabel(name))}</option>`).join("");
 }
 function fillCashSelect(id, selected = "contanti") {
   const el = safeEl(id);
@@ -393,29 +429,37 @@ function employeeMonthStatus(employee, monthPrefix = getCurrentMonthPrefix()) {
   const due = n(employee.dovuto_mensile);
   return { due, paid, residuo: due - paid };
 }
+function emptyCashBreakdownRow() {
+  return { iniziale: 0, incassi: 0, lordo: 0, commissioni: 0, entrate: 0, uscite: 0, saldo: 0 };
+}
 function computeCashBreakdown() {
   const out = {};
   cashNames().forEach(name => {
-    out[name] = { iniziale: 0, incassi: 0, entrate: 0, uscite: 0, saldo: 0 };
+    out[name] = emptyCashBreakdownRow();
   });
 
   Object.entries(state.cashInitial || {}).forEach(([name, amount]) => {
-    if (!out[name]) out[name] = { iniziale: 0, incassi: 0, entrate: 0, uscite: 0, saldo: 0 };
+    if (!out[name]) out[name] = emptyCashBreakdownRow();
     out[name].iniziale += n(amount);
   });
   (state.customCashes || []).forEach(c => {
-    if (!out[c.name]) out[c.name] = { iniziale: 0, incassi: 0, entrate: 0, uscite: 0, saldo: 0 };
+    if (!out[c.name]) out[c.name] = emptyCashBreakdownRow();
     out[c.name].iniziale += n(c.amount);
   });
   state.dailyRecords.forEach(rec => {
     cashNames().forEach(name => {
-      if (!out[name]) out[name] = { iniziale: 0, incassi: 0, entrate: 0, uscite: 0, saldo: 0 };
-      out[name].incassi += getDailyCashAmount(rec, name);
+      if (!out[name]) out[name] = emptyCashBreakdownRow();
+      const gross = getDailyCashAmount(rec, name);
+      const fee = getDailyCashFeeAmount(rec, name);
+      const net = getDailyCashNetAmount(rec, name);
+      out[name].lordo += gross;
+      out[name].commissioni += fee;
+      out[name].incassi += net;
     });
   });
   state.cashMovements.forEach(m => {
     const name = m.cassa || "contanti";
-    if (!out[name]) out[name] = { iniziale: 0, incassi: 0, entrate: 0, uscite: 0, saldo: 0 };
+    if (!out[name]) out[name] = emptyCashBreakdownRow();
     if (m.tipo === "entrata") out[name].entrate += n(m.importo);
     else out[name].uscite += n(m.importo);
   });
@@ -1352,14 +1396,19 @@ function renderDashboard() {
   }
   if (safeEl("cashSummary")) {
     const breakdown = computeCashBreakdown();
-    $("cashSummary").innerHTML = Object.entries(breakdown).map(([k,row]) => `
+    $("cashSummary").innerHTML = Object.entries(breakdown).map(([k,row]) => {
+      const detail = isPosCash(k)
+        ? `iniziale ${euro(row.iniziale)} · incassi netti ${euro(row.incassi)} · POS lordo ${euro(row.lordo)} · commissioni SumUp ${euro(row.commissioni)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`
+        : `iniziale ${euro(row.iniziale)} · incassi ${euro(row.incassi)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`;
+      return `
       <div class="item cash-balance-row">
         <div>
-          <strong>${escapeHtml(k === "contanti" ? "Contanti" : k === "pos" ? "POS" : k)}</strong>
-          <small>iniziale ${euro(row.iniziale)} · incassi ${euro(row.incassi)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}</small>
+          <strong>${escapeHtml(cashLabel(k))}</strong>
+          <small>${detail}</small>
         </div>
         <div class="cash-balance-total">${euro(row.saldo)}</div>
-      </div>`).join("") || `<div class="alert">Nessuna cassa presente.</div>`;
+      </div>`;
+    }).join("") || `<div class="alert">Nessuna cassa presente.</div>`;
   }
 }
 
@@ -1373,7 +1422,7 @@ function renderDailyTable() {
       <td><button class="btn ghost day-edit-btn" data-day-date="${r.data}">${r.data}</button></td>
       <td>${formatSavedAt(r)}</td>
       <td>${totals.totalCoperti}</td>
-      <td>${euro(totals.totalIncasso)}</td>
+      <td>${euro(totals.totalIncasso)}${totals.totalCommissioni ? `<br><small>netto ${euro(totals.totalIncassoNetto)} · SumUp ${euro(totals.totalCommissioni)}</small>` : ""}</td>
       <td>${r.pizze}</td>
       <td>${r.menu} / ${r.supplementi}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -1562,30 +1611,44 @@ function recordsInRange(from, to) {
   return state.dailyRecords.filter(r => (!range.from || r.data >= range.from) && (!range.to || r.data <= range.to));
 }
 function renderReportFromRecords(records, label = "") {
-  let copPranzo=0,copCena=0,copBanchetti=0,incasso=0,asporto=0,bancone=0,pizze=0,menu=0,supp=0,portate=0;
+  let copPranzo=0,copCena=0,copBanchetti=0,incasso=0,incassoNetto=0,commissioni=0,asporto=0,bancone=0,pizze=0,menu=0,supp=0,portate=0;
   const cashTotals = {};
-  cashNames().forEach(c => cashTotals[c] = 0);
+  const cashGrossTotals = {};
+  const cashFees = {};
+  cashNames().forEach(c => { cashTotals[c] = 0; cashGrossTotals[c] = 0; cashFees[c] = 0; });
   records.forEach(r=>{
     copPranzo += n(r.pranzo?.coperti); copCena += n(r.cena?.coperti); copBanchetti += n(r.banchetti?.coperti);
-    incasso += getDailyTotals(r).totalIncasso;
+    const totals = getDailyTotals(r);
+    incasso += totals.totalIncasso;
+    incassoNetto += totals.totalIncassoNetto;
+    commissioni += totals.totalCommissioni;
     asporto += n(r.pranzo?.asporto)+n(r.cena?.asporto)+n(r.banchetti?.asporto);
     bancone += n(r.bancone); pizze += n(r.pizze); menu += n(r.menu); supp += n(r.supplementi); portate += n(r.portate);
-    cashNames().forEach(c => cashTotals[c] = n(cashTotals[c]) + getDailyCashAmount(r, c));
+    cashNames().forEach(c => {
+      cashTotals[c] = n(cashTotals[c]) + getDailyCashNetAmount(r, c);
+      cashGrossTotals[c] = n(cashGrossTotals[c]) + getDailyCashAmount(r, c);
+      cashFees[c] = n(cashFees[c]) + getDailyCashFeeAmount(r, c);
+    });
   });
   if (safeEl("rCopPranzo")) $("rCopPranzo").textContent = copPranzo;
   if (safeEl("rCopCena")) $("rCopCena").textContent = copCena;
   if (safeEl("rCopBanchetti")) $("rCopBanchetti").textContent = copBanchetti;
   if (safeEl("rIncasso")) $("rIncasso").textContent = euro(incasso);
-  const cashCards = Object.entries(cashTotals).map(([name,total]) => `<div class="card inner"><strong>${escapeHtml(name === "contanti" ? "Contanti" : name === "pos" ? "POS" : name)}</strong><div>${euro(total)}</div></div>`).join("");
   if (safeEl("reportSummary")) $("reportSummary").innerHTML = [
     `<div class="card inner"><strong>${escapeHtml(label || "Periodo")}</strong><div>${records.length} giornate</div></div>`,
     `<div class="card inner"><strong>Coperti complessivi</strong><div>${copPranzo + copCena + copBanchetti}</div></div>`,
+    `<div class="card inner"><strong>Incasso lordo</strong><div>${euro(incasso)}</div></div>`,
+    `<div class="card inner"><strong>Incasso netto dopo SumUp</strong><div>${euro(incassoNetto)}</div></div>`,
+    `<div class="card inner"><strong>Commissioni SumUp POS</strong><div>${euro(commissioni)}</div></div>`,
     `<div class="card inner"><strong>Asporto totale</strong><div>${euro(asporto)}</div></div>`,
     `<div class="card inner"><strong>Bancone totale</strong><div>${euro(bancone)}</div></div>`,
     `<div class="card inner"><strong>Pizze totali</strong><div>${pizze}</div></div>`,
     `<div class="card inner"><strong>Menù / Supplementi</strong><div>${menu} / ${supp}</div></div>`,
     `<div class="card inner"><strong>Portate</strong><div>${portate}</div></div>`,
-    ...Object.entries(cashTotals).map(([name,total]) => `<div class="card inner"><strong>${escapeHtml(name === "contanti" ? "Contanti" : name === "pos" ? "POS" : name)}</strong><div>${euro(total)}</div></div>`),
+    ...Object.entries(cashTotals).map(([name,total]) => {
+      const extra = isPosCash(name) ? `<small>lordo ${euro(cashGrossTotals[name])} · commissioni ${euro(cashFees[name])}</small>` : "";
+      return `<div class="card inner"><strong>${escapeHtml(isPosCash(name) ? "POS netto" : cashLabel(name))}</strong><div>${euro(total)}</div>${extra}</div>`;
+    }),
   ].join("");
 }
 function runMonthlyReport() {
