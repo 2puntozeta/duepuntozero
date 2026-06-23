@@ -286,22 +286,7 @@ function supplierInputValue(row = {}) {
   if (row.supplier_id) return (state.suppliers || []).find(s => s.id === row.supplier_id)?.nome || "";
   return "";
 }
-function employeeDatalistOptions() {
-  const seen = new Set();
-  return (state.employees || []).map(e => {
-    const clean = String(e.nome || "").trim();
-    if (!clean) return "";
-    const key = normalizeSearchText(clean);
-    if (seen.has(key)) return "";
-    seen.add(key);
-    const role = e.ruolo ? ` · ${e.ruolo}` : "";
-    return `<option value="${escapeHtml(clean)}" label="${escapeHtml(clean + role)}"></option>`;
-  }).join("");
-}
-function refreshEmployeesDatalist() {
-  const el = safeEl("employeesDatalist");
-  if (el) el.innerHTML = employeeDatalistOptions();
-}
+function employeeSearchLabel(employee) { return employee?.nome || ""; }
 function findEmployeeByName(value) {
   const needle = normalizeSearchText(value);
   if (!needle) return null;
@@ -309,11 +294,95 @@ function findEmployeeByName(value) {
 }
 function employeeInputValue(row = {}) {
   if (row.employee_search) return row.employee_search;
-  if (row.employee_name) return row.employee_name;
   if (row.employee_id) return (state.employees || []).find(e => e.id === row.employee_id)?.nome || "";
-  return "";
+  if (row.employee_name) return row.employee_name;
+  return row.new_employee_name || "";
 }
-
+function inputNumberValue(value) {
+  const num = n(value);
+  return num === 0 ? "" : String(num);
+}
+function supplierAutocompleteItems(query = "") {
+  const q = normalizeSearchText(query);
+  const items = [];
+  (state.suppliers || []).forEach(s => {
+    const aliases = supplierAliases(s);
+    const label = supplierSearchLabel(s);
+    const searchable = [s.nome, ...aliases].map(normalizeSearchText);
+    const score = !q ? 3 : searchable.some(x => x === q) ? 0 : searchable.some(x => x.startsWith(q)) ? 1 : searchable.some(x => x.includes(q)) ? 2 : 99;
+    if (!q || score < 99) items.push({ id:s.id, value:s.nome, label, hint:aliases.length ? `alias: ${aliases.join(", ")}` : "", score });
+  });
+  return items.sort((a,b) => a.score - b.score || String(a.label).localeCompare(String(b.label))).slice(0, 12);
+}
+function employeeAutocompleteItems(query = "") {
+  const q = normalizeSearchText(query);
+  return (state.employees || [])
+    .map(e => {
+      const name = employeeSearchLabel(e);
+      const key = normalizeSearchText(name);
+      const score = !q ? 3 : key === q ? 0 : key.startsWith(q) ? 1 : key.includes(q) ? 2 : 99;
+      return { id:e.id, value:name, label:name, hint:e.ruolo || "", score };
+    })
+    .filter(item => !q || item.score < 99)
+    .sort((a,b) => a.score - b.score || String(a.label).localeCompare(String(b.label)))
+    .slice(0, 12);
+}
+function setupAutocomplete(input, getItems, onPick, opts = {}) {
+  if (!input || input.dataset.autocompleteReady === "1") return;
+  input.dataset.autocompleteReady = "1";
+  input.removeAttribute("list");
+  input.setAttribute("autocomplete", "off");
+  const field = input.closest(".field") || input.parentElement;
+  if (field) field.classList.add("autocomplete-field");
+  const menu = document.createElement("div");
+  menu.className = "autocomplete-menu hidden";
+  (field || input.parentElement || document.body).appendChild(menu);
+  let hideTimer = null;
+  const hide = () => { menu.classList.add("hidden"); };
+  const show = () => {
+    clearTimeout(hideTimer);
+    const query = input.value || "";
+    const items = getItems(query) || [];
+    if (!items.length) {
+      const allowNew = opts.allowNew && query.trim();
+      if (!allowNew) { menu.innerHTML = `<div class="autocomplete-empty">Nessun risultato</div>`; menu.classList.remove("hidden"); return; }
+      menu.innerHTML = `<button type="button" class="autocomplete-option" data-new="1"><strong>Usa/Crea nuovo</strong><small>${escapeHtml(query.trim())}</small></button>`;
+      menu.classList.remove("hidden");
+      menu.querySelector("button")?.addEventListener("pointerdown", ev => { ev.preventDefault(); onPick({ id:"", value:query.trim(), label:query.trim(), isNew:true }); hide(); });
+      return;
+    }
+    menu.innerHTML = items.map((item, idx) => `<button type="button" class="autocomplete-option" data-index="${idx}"><strong>${escapeHtml(item.label || item.value)}</strong>${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}</button>`).join("");
+    menu.classList.remove("hidden");
+    menu.querySelectorAll("button[data-index]").forEach(btn => {
+      const pick = (ev) => { ev.preventDefault(); const item = items[Number(btn.dataset.index)]; onPick(item); hide(); input.blur(); };
+      btn.addEventListener("pointerdown", pick);
+      btn.addEventListener("mousedown", pick);
+      btn.addEventListener("touchstart", pick, { passive:false });
+    });
+  };
+  input.addEventListener("input", show);
+  input.addEventListener("focus", show);
+  input.addEventListener("click", show);
+  input.addEventListener("blur", () => { hideTimer = setTimeout(hide, 180); });
+}
+function setupSupplierSearchInput(input, hiddenInput, opts = {}) {
+  setupAutocomplete(input, supplierAutocompleteItems, item => {
+    input.value = item.value || "";
+    if (hiddenInput) hiddenInput.value = item.id || "";
+  }, opts);
+  input?.addEventListener("input", () => { if (hiddenInput && !findSupplierByNameOrAlias(input.value)) hiddenInput.value = ""; });
+}
+function setupEmployeeSearchInput(input, hiddenInput, opts = {}) {
+  setupAutocomplete(input, employeeAutocompleteItems, item => {
+    input.value = item.value || "";
+    if (hiddenInput) hiddenInput.value = item.id || "";
+  }, opts);
+  input?.addEventListener("input", () => { if (hiddenInput && !findEmployeeByName(input.value)) hiddenInput.value = ""; });
+}
+function setupGlobalSearchInputs() {
+  setupSupplierSearchInput(safeEl("fornMovSearch"), safeEl("fornMovNome"), { allowNew:false });
+  setupEmployeeSearchInput(safeEl("dipMovNome"), null, { allowNew:false });
+}
 
 const SERVICE_NUMBER_FIELDS = ["coperti", "contanti", "pos", "asporto", "servizio", "bancone", "pizze", "copertiRistorante", "menu", "supplementi", "portate"];
 const SERVICE_METRIC_FIELDS = ["pizze", "copertiRistorante", "menu", "supplementi", "portate"];
@@ -423,8 +492,8 @@ function updateDailyCashAuto() {
   const auto = calculateDailyCashAutoFromForm();
   const contantiInput = safeEl("dailyCashInputs")?.querySelector('input[data-daily-cash="contanti"]');
   const posInput = safeEl("dailyCashInputs")?.querySelector('input[data-daily-cash="pos"]');
-  if (contantiInput) contantiInput.value = auto.contanti;
-  if (posInput) posInput.value = auto.pos;
+  if (contantiInput) contantiInput.value = inputNumberValue(auto.contanti);
+  if (posInput) posInput.value = inputNumberValue(auto.pos);
 }
 function renderDailyCashInputs(rec = null) {
   const box = safeEl("dailyCashInputs");
@@ -433,12 +502,12 @@ function renderDailyCashInputs(rec = null) {
   box.querySelectorAll("input[data-daily-cash]").forEach(input => currentValues[input.dataset.dailyCash] = input.value);
   const auto = rec ? autoCashFromRecord(rec) : calculateDailyCashAutoFromForm();
   box.innerHTML = cashNames().map(name => {
-    let value = currentValues[name] ?? 0;
+    let value = currentValues[name] ?? "";
     let readonly = "";
     let note = "";
-    if (name === "contanti") { value = auto.contanti; readonly = "readonly"; note = `<small class="muted">Calcolato automaticamente dai servizi.</small>`; }
-    else if (name === "pos") { value = auto.pos; readonly = "readonly"; note = `<small class="muted">POS lordo calcolato automaticamente. SumUp -0,95% nel saldo cassa.</small>`; }
-    else if (rec?.casse && Object.prototype.hasOwnProperty.call(rec.casse, name)) value = n(rec.casse[name]);
+    if (name === "contanti") { value = inputNumberValue(auto.contanti); readonly = "readonly"; note = `<small class="muted">Calcolato automaticamente dai servizi.</small>`; }
+    else if (name === "pos") { value = inputNumberValue(auto.pos); readonly = "readonly"; note = `<small class="muted">POS lordo calcolato automaticamente. SumUp -0,95% nel saldo cassa.</small>`; }
+    else if (rec?.casse && Object.prototype.hasOwnProperty.call(rec.casse, name)) value = inputNumberValue(rec.casse[name]);
     const label = isPosCash(name) ? "POS lordo" : cashLabel(name);
     return `<div class="field"><label>${escapeHtml(label)}</label><input data-daily-cash="${escapeHtml(name)}" type="number" step="0.01" value="${value}" ${readonly} />${note}</div>`;
   }).join("");
@@ -546,10 +615,8 @@ function employeePaymentRowsFromMovements(dateStr) {
   return (state.employeeMovements || [])
     .filter(m => m.data === dateStr && !isDailyAutoLinkedMovement(m, dateStr))
     .map(m => {
-      const employee = state.employees.find(e => e.id === m.employee_id);
       return {
         employee_id: m.employee_id || "",
-        employee_search: employee?.nome || "",
         new_employee_name: "",
         tipo: m.tipo || "acconto",
         cassa: extractCashFromNote(m.nota, "contanti"),
@@ -587,15 +654,15 @@ function addDailySupplierPaymentRow(row = {}) {
     <input data-field="source_kind" type="hidden" value="${escapeHtml(row.source_kind || "")}" />
     <input data-field="source_id" type="hidden" value="${escapeHtml(row.source_id || "")}" />
     ${sourceInfo}
-    <div class="field"><label>Cerca fornitore / alias</label><input data-field="supplier_search" list="suppliersDatalist" value="${escapeHtml(supplierInputValue(row))}" placeholder="nome o alias" autocomplete="off" /><input data-field="supplier_id" type="hidden" value="${escapeHtml(row.supplier_id || "")}" /></div>
-    <div class="field"><label>Nuovo fornitore</label><input data-field="new_supplier_name" value="${escapeHtml(row.new_supplier_name || "")}" placeholder="scrivi qui se non esiste" /></div>
+    <div class="field"><label>Fornitore</label><input data-field="supplier_search" value="${escapeHtml(supplierInputValue(row))}" placeholder="scrivi e scegli fornitore / alias" autocomplete="off" /><input data-field="supplier_id" type="hidden" value="${escapeHtml(row.supplier_id || "")}" /><input data-field="new_supplier_name" type="hidden" value="${escapeHtml(row.new_supplier_name || "")}" /><small class="muted">Se non esiste, scrivi il nome e verrà creato al salvataggio.</small></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
-    <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
+    <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${inputNumberValue(row.importo)}" /></div>
     <div class="field"><label>Data/ora pagamento</label><input data-field="operated_at" type="datetime-local" value="${escapeHtml(row.operated_at || "")}" /></div>
     <div class="field"><label>Nota</label><input data-field="nota" value="${escapeHtml(row.nota || "")}" placeholder="es. pagamento merce" /></div>
     <button class="secondary daily-row-remove" type="button">Rimuovi</button>`;
   div.querySelector(".daily-row-remove")?.addEventListener("click", () => div.remove());
   box.appendChild(div);
+  setupSupplierSearchInput(div.querySelector('[data-field="supplier_search"]'), div.querySelector('[data-field="supplier_id"]'), { allowNew:true });
 }
 function addDailyEmployeePaymentRow(row = {}) {
   const box = safeEl("dailyEmployeePayments");
@@ -607,16 +674,16 @@ function addDailyEmployeePaymentRow(row = {}) {
     <input data-field="source_kind" type="hidden" value="${escapeHtml(row.source_kind || "")}" />
     <input data-field="source_id" type="hidden" value="${escapeHtml(row.source_id || "")}" />
     ${sourceInfo}
-    <div class="field"><label>Cerca dipendente</label><input data-field="employee_search" list="employeesDatalist" value="${escapeHtml(employeeInputValue(row))}" placeholder="inizia a scrivere il nome" autocomplete="off" /><input data-field="employee_id" type="hidden" value="${escapeHtml(row.employee_id || "")}" /></div>
-    <div class="field"><label>Nuovo dipendente</label><input data-field="new_employee_name" value="${escapeHtml(row.new_employee_name || "")}" placeholder="opzionale: se non esiste" /></div>
+    <div class="field"><label>Dipendente</label><input data-field="employee_search" value="${escapeHtml(employeeInputValue(row))}" placeholder="scrivi e scegli dipendente" autocomplete="off" /><input data-field="employee_id" type="hidden" value="${escapeHtml(row.employee_id || "")}" /><input data-field="new_employee_name" type="hidden" value="${escapeHtml(row.new_employee_name || "")}" /><small class="muted">Se non esiste, scrivi il nome e verrà creato al salvataggio.</small></div>
     <div class="field"><label>Tipo</label><select data-field="tipo"><option value="acconto" ${(row.tipo || "acconto") === "acconto" ? "selected" : ""}>Acconto</option><option value="pagamento" ${row.tipo === "pagamento" ? "selected" : ""}>Pagamento</option><option value="extra" ${row.tipo === "extra" ? "selected" : ""}>Extra</option></select></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
-    <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
+    <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${inputNumberValue(row.importo)}" /></div>
     <div class="field"><label>Data/ora pagamento</label><input data-field="operated_at" type="datetime-local" value="${escapeHtml(row.operated_at || "")}" /></div>
     <div class="field"><label>Nota</label><input data-field="nota" value="${escapeHtml(row.nota || "")}" placeholder="es. acconto" /></div>
     <button class="secondary daily-row-remove" type="button">Rimuovi</button>`;
   div.querySelector(".daily-row-remove")?.addEventListener("click", () => div.remove());
   box.appendChild(div);
+  setupEmployeeSearchInput(div.querySelector('[data-field="employee_search"]'), div.querySelector('[data-field="employee_id"]'), { allowNew:true });
 }
 function renderDailySupplierPayments(rows = []) {
   const box = safeEl("dailySupplierPayments");
@@ -634,11 +701,11 @@ function collectDailySupplierPayments() {
   return Array.from(safeEl("dailySupplierPayments")?.querySelectorAll(".daily-supplier-row") || []).map(row => {
     const supplierSearch = row.querySelector('[data-field="supplier_search"]')?.value?.trim() || "";
     const supplier = findSupplierByNameOrAlias(supplierSearch);
-    const explicitNew = row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "";
+    const hiddenNew = row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "";
     return {
       supplier_id: supplier?.id || row.querySelector('[data-field="supplier_id"]')?.value || "",
       supplier_search: supplierSearch,
-      new_supplier_name: explicitNew || (!supplier && supplierSearch ? supplierSearch : ""),
+      new_supplier_name: supplier ? "" : (hiddenNew || supplierSearch),
       cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
       importo: n(row.querySelector('[data-field="importo"]')?.value),
       operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
@@ -646,17 +713,17 @@ function collectDailySupplierPayments() {
       source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
       source_id: row.querySelector('[data-field="source_id"]')?.value || "",
     };
-  }).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
+  }).filter(row => (row.supplier_id || row.new_supplier_name || row.supplier_search) && row.importo > 0);
 }
 function collectDailyEmployeePayments() {
   return Array.from(safeEl("dailyEmployeePayments")?.querySelectorAll(".daily-employee-row") || []).map(row => {
     const employeeSearch = row.querySelector('[data-field="employee_search"]')?.value?.trim() || "";
     const employee = findEmployeeByName(employeeSearch);
-    const explicitNew = row.querySelector('[data-field="new_employee_name"]')?.value?.trim() || "";
+    const hiddenNew = row.querySelector('[data-field="new_employee_name"]')?.value?.trim() || "";
     return {
       employee_id: employee?.id || row.querySelector('[data-field="employee_id"]')?.value || "",
       employee_search: employeeSearch,
-      new_employee_name: explicitNew || (!employee && employeeSearch ? employeeSearch : ""),
+      new_employee_name: employee ? "" : (hiddenNew || employeeSearch),
       tipo: row.querySelector('[data-field="tipo"]')?.value || "acconto",
       cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
       importo: n(row.querySelector('[data-field="importo"]')?.value),
@@ -665,7 +732,7 @@ function collectDailyEmployeePayments() {
       source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
       source_id: row.querySelector('[data-field="source_id"]')?.value || "",
     };
-  }).filter(row => (row.employee_id || row.employee_search || row.new_employee_name) && row.importo > 0);
+  }).filter(row => (row.employee_id || row.new_employee_name || row.employee_search) && row.importo > 0);
 }
 function collectLegacyDailyFromFormOnly() {
   return {
@@ -677,7 +744,7 @@ function collectLegacyDailyFromFormOnly() {
 function fillService(prefix, service, key) {
   const s = normalizeService(service, key);
   const map = { Coperti:"coperti", Asporto:"asporto", Contanti:"contanti", Pos:"pos", Servizio:"servizio", Bancone:"bancone", Pizze:"pizze", CopertiRistorante:"copertiRistorante", Menu:"menu", Supplementi:"supplementi", Portate:"portate" };
-  Object.entries(map).forEach(([suffix, field]) => { if (safeEl(prefix + suffix)) safeEl(prefix + suffix).value = s[field] ?? 0; });
+  Object.entries(map).forEach(([suffix, field]) => { if (safeEl(prefix + suffix)) safeEl(prefix + suffix).value = inputNumberValue(s[field]); });
 }
 function collectService(prefix) {
   return normalizeService({
@@ -704,17 +771,17 @@ function addBanchettoRow(row = {}) {
     <div class="toolbar"><h4>${escapeHtml(s.nome || "Banchetto")}</h4><button class="secondary banchetto-remove-btn" type="button">Rimuovi</button></div>
     <div class="grid3">
       <div class="field"><label>Nome banchetto</label><input data-field="nome" value="${escapeHtml(s.nome || "")}" placeholder="es. Comunione / Compleanno" /></div>
-      <div class="field"><label>Coperti</label><input data-field="coperti" type="number" value="${s.coperti}" /></div>
-      <div class="field"><label>Contanti</label><input data-field="contanti" type="number" step="0.01" value="${s.contanti}" /></div>
-      <div class="field"><label>POS lordo</label><input data-field="pos" type="number" step="0.01" value="${s.pos}" /></div>
-      <div class="field"><label>Asporto €</label><input data-field="asporto" type="number" step="0.01" value="${s.asporto}" /></div>
-      <div class="field"><label>Banchetti €</label><input data-field="servizio" type="number" step="0.01" value="${s.servizio}" /></div>
-      <div class="field"><label>Bancone €</label><input data-field="bancone" type="number" step="0.01" value="${s.bancone}" /></div>
-      <div class="field"><label>Pizze totali</label><input data-field="pizze" type="number" value="${s.pizze}" /></div>
-      <div class="field"><label>Coperti ristorante</label><input data-field="copertiRistorante" type="number" value="${s.copertiRistorante}" /></div>
-      <div class="field"><label>Menù</label><input data-field="menu" type="number" value="${s.menu}" /></div>
-      <div class="field"><label>Supplementi</label><input data-field="supplementi" type="number" value="${s.supplementi}" /></div>
-      <div class="field"><label>Portate</label><input data-field="portate" type="number" value="${s.portate}" /></div>
+      <div class="field"><label>Coperti</label><input data-field="coperti" type="number" value="${inputNumberValue(s.coperti)}" /></div>
+      <div class="field"><label>Contanti</label><input data-field="contanti" type="number" step="0.01" value="${inputNumberValue(s.contanti)}" /></div>
+      <div class="field"><label>POS lordo</label><input data-field="pos" type="number" step="0.01" value="${inputNumberValue(s.pos)}" /></div>
+      <div class="field"><label>Asporto €</label><input data-field="asporto" type="number" step="0.01" value="${inputNumberValue(s.asporto)}" /></div>
+      <div class="field"><label>Banchetti €</label><input data-field="servizio" type="number" step="0.01" value="${inputNumberValue(s.servizio)}" /></div>
+      <div class="field"><label>Bancone €</label><input data-field="bancone" type="number" step="0.01" value="${inputNumberValue(s.bancone)}" /></div>
+      <div class="field"><label>Pizze totali</label><input data-field="pizze" type="number" value="${inputNumberValue(s.pizze)}" /></div>
+      <div class="field"><label>Coperti ristorante</label><input data-field="copertiRistorante" type="number" value="${inputNumberValue(s.copertiRistorante)}" /></div>
+      <div class="field"><label>Menù</label><input data-field="menu" type="number" value="${inputNumberValue(s.menu)}" /></div>
+      <div class="field"><label>Supplementi</label><input data-field="supplementi" type="number" value="${inputNumberValue(s.supplementi)}" /></div>
+      <div class="field"><label>Portate</label><input data-field="portate" type="number" value="${inputNumberValue(s.portate)}" /></div>
     </div>
     <p class="muted small">Controllo: asporto + banchetti + bancone deve essere uguale a contanti + POS.</p>`;
   div.querySelector(".banchetto-remove-btn")?.addEventListener("click", () => { div.remove(); if (!safeEl("banchettiRows")?.querySelector(".banchetto-row")) addBanchettoRow({}); updateDailyCashAuto(); });
@@ -1997,7 +2064,7 @@ async function saveNewCash() {
   if (!name) return showGlobalMessage("Inserisci il nome della cassa.", "error");
   const { error } = await supabase.from("custom_cash_state").upsert({ company_id: state.activeCompany.id, name, amount }, { onConflict: "company_id,name" });
   if (error) return showGlobalMessage(error.message, "error");
-  $("newCashName").value = ""; $("newCashAmount").value = 0;
+  $("newCashName").value = ""; $("newCashAmount").value = "";
   await refreshData("Cassa personalizzata salvata.");
 }
 async function deleteCustomCash(name) {
@@ -2024,7 +2091,7 @@ function resetCashMovementForm() {
   if (safeEl("movData")) $("movData").value = todayStr();
   if (safeEl("movCassa")) $("movCassa").value = "contanti";
   if (safeEl("movTipo")) $("movTipo").value = "entrata";
-  if (safeEl("movImporto")) $("movImporto").value = 0;
+  if (safeEl("movImporto")) $("movImporto").value = "";
   if (safeEl("movOperatedAt")) $("movOperatedAt").value = "";
   if (safeEl("movDescrizione")) $("movDescrizione").value = "";
   if (safeEl("saveMovBtn")) $("saveMovBtn").textContent = "Aggiungi movimento";
@@ -2130,7 +2197,7 @@ async function getOrCreateSupplierFromDaily(row) {
   const searched = findSupplierByNameOrAlias(row.supplier_search);
   if (searched) return searched;
   if (row.supplier_id) return state.suppliers.find(s => s.id === row.supplier_id) || null;
-  const name = String(row.new_supplier_name || "").trim();
+  const name = String(row.new_supplier_name || row.supplier_search || "").trim();
   if (!name) return null;
   const existing = state.suppliers.find(s => normalizeSearchText(s.nome) === normalizeSearchText(name));
   if (existing) return existing;
@@ -2146,11 +2213,9 @@ async function getOrCreateSupplierFromDaily(row) {
 }
 async function getOrCreateEmployeeFromDaily(row) {
   if (row.employee_id) return state.employees.find(e => e.id === row.employee_id) || null;
-  const searched = findEmployeeByName(row.employee_search);
-  if (searched) return searched;
   const name = String(row.new_employee_name || row.employee_search || "").trim();
   if (!name) return null;
-  const existing = findEmployeeByName(name);
+  const existing = state.employees.find(e => String(e.nome || "").toLowerCase() === name.toLowerCase());
   if (existing) return existing;
   const { data, error } = await supabase.from("employees").insert({
     company_id: state.activeCompany.id,
@@ -2168,7 +2233,7 @@ async function syncDailyLinkedMovements(rec) {
 
   const supplierRows = [];
   const supplierRowsToInsert = [];
-  for (const p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name) && n(p.importo) > 0)) {
+  for (const p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name || p.supplier_search) && n(p.importo) > 0)) {
     if (p.source_id) {
       const supplier = state.suppliers.find(s => s.id === p.supplier_id) || findSupplierByNameOrAlias(p.supplier_search);
       if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome });
@@ -2184,15 +2249,15 @@ async function syncDailyLinkedMovements(rec) {
 
   const employeeRows = [];
   const employeeRowsToInsert = [];
-  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.employee_search || p.new_employee_name) && n(p.importo) > 0)) {
+  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name || p.employee_search) && n(p.importo) > 0)) {
     if (p.source_id) {
-      const employee = state.employees.find(e => e.id === p.employee_id) || findEmployeeByName(p.employee_search);
-      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome, employee_search: employee.nome });
+      const employee = state.employees.find(e => e.id === p.employee_id);
+      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
       continue;
     }
     const employee = await getOrCreateEmployeeFromDaily(p);
     if (employee) {
-      const row = { ...p, employee_id: employee.id, employee_name: employee.nome, employee_search: employee.nome };
+      const row = { ...p, employee_id: employee.id, employee_name: employee.nome };
       employeeRows.push(row);
       employeeRowsToInsert.push(row);
     }
@@ -2400,6 +2465,7 @@ async function syncDailyPayloadAfterMovementEdit(kind, oldMovement, newPayload, 
   } else {
     newRec.employeePayments = (newRec.employeePayments || []).concat({
       employee_id: newPayload.employee_id,
+      employee_search: (state.employees || []).find(e => e.id === newPayload.employee_id)?.nome || "",
       new_employee_name: "",
       tipo: newPayload.tipo || "acconto",
       cassa: newPayload.cassa || "contanti",
@@ -2507,7 +2573,7 @@ function resetSupplierDetailMovementForm(clearEditing = true) {
   if (safeEl("supplierDetailData")) $("supplierDetailData").value = todayStr();
   if (safeEl("supplierDetailOperatedAt")) $("supplierDetailOperatedAt").value = "";
   if (safeEl("supplierDetailTipo")) $("supplierDetailTipo").value = "pagamento";
-  if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = 0;
+  if (safeEl("supplierDetailImporto")) $("supplierDetailImporto").value = "";
   if (safeEl("supplierDetailNota")) $("supplierDetailNota").value = "";
   if (safeEl("saveSupplierDetailMovBtn")) $("saveSupplierDetailMovBtn").textContent = "Aggiungi movimento";
   safeEl("cancelSupplierDetailEditBtn")?.classList.add("hidden");
@@ -2518,7 +2584,7 @@ function resetEmployeeDetailMovementForm(clearEditing = true) {
   if (safeEl("employeeDetailData")) $("employeeDetailData").value = todayStr();
   if (safeEl("employeeDetailOperatedAt")) $("employeeDetailOperatedAt").value = "";
   if (safeEl("employeeDetailTipo")) $("employeeDetailTipo").value = "acconto";
-  if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = 0;
+  if (safeEl("employeeDetailImporto")) $("employeeDetailImporto").value = "";
   if (safeEl("employeeDetailNota")) $("employeeDetailNota").value = "";
   if (safeEl("saveEmployeeDetailMovBtn")) $("saveEmployeeDetailMovBtn").textContent = "Aggiungi movimento";
   safeEl("cancelEmployeeDetailEditBtn")?.classList.add("hidden");
@@ -2567,7 +2633,7 @@ function startSupplierEdit(supplier) {
 }
 function resetSupplierForm() {
   editingSupplierId = null;
-  $("fornNome").value = ""; $("fornAlias").value = ""; $("fornSospeso").value = 0;
+  $("fornNome").value = ""; $("fornAlias").value = ""; $("fornSospeso").value = "";
   $("saveFornBtn").textContent = "Salva fornitore";
   safeEl("cancelFornEditBtn")?.classList.add("hidden");
   if (safeEl("fornFormHint")) $("fornFormHint").textContent = "Inserisci o modifica un fornitore.";
@@ -2631,7 +2697,7 @@ async function saveSupplierMovement() {
   if (!payload.supplierId || !payload.data || payload.importo <= 0) return showGlobalMessage("Controlla fornitore, data e importo.", "error");
   try {
     await insertSupplierMovement(payload);
-    if (safeEl("fornMovImporto")) $("fornMovImporto").value = 0;
+    if (safeEl("fornMovImporto")) $("fornMovImporto").value = "";
     if (safeEl("fornMovOperatedAt")) $("fornMovOperatedAt").value = "";
     if (safeEl("fornMovNota")) $("fornMovNota").value = "";
     await refreshData("Movimento fornitore salvato e cassa aggiornata.");
@@ -2677,7 +2743,7 @@ function startEmployeeEdit(employee) {
 }
 function resetEmployeeForm() {
   editingEmployeeId = null;
-  $("dipNome").value = ""; $("dipRuolo").value = ""; $("dipDovuto").value = 0;
+  $("dipNome").value = ""; $("dipRuolo").value = ""; $("dipDovuto").value = "";
   $("saveDipBtn").textContent = "Salva dipendente";
   safeEl("cancelDipEditBtn")?.classList.add("hidden");
   if (safeEl("dipFormHint")) $("dipFormHint").textContent = "Inserisci o modifica un dipendente.";
@@ -2740,7 +2806,7 @@ async function saveEmployeeMovement() {
   if (!payload.employeeId || !payload.data || payload.importo <= 0) return showGlobalMessage("Controlla dipendente, data e importo.", "error");
   try {
     await insertEmployeeMovement(payload);
-    if (safeEl("dipMovImporto")) $("dipMovImporto").value = 0;
+    if (safeEl("dipMovImporto")) $("dipMovImporto").value = "";
     if (safeEl("dipMovOperatedAt")) $("dipMovOperatedAt").value = "";
     if (safeEl("dipMovNota")) $("dipMovNota").value = "";
     await refreshData("Movimento dipendente salvato e cassa aggiornata.");
@@ -2787,7 +2853,7 @@ function resetBookingForm() {
   editingBookingId = null;
   $("saveBanBtn").textContent = "Salva prenotazione";
   $("banData").value = todayStr();
-  $("banNome").value = ""; $("banAdulti").value = 0; $("banBambini").value = 0; $("banTipo").value = "ristorante"; $("banImporto").value = 0; $("banOra").value = ""; $("banNote").value = "";
+  $("banNome").value = ""; $("banAdulti").value = ""; $("banBambini").value = ""; $("banTipo").value = "ristorante"; $("banImporto").value = ""; $("banOra").value = ""; $("banNote").value = "";
 }
 function editBookingById(id) {
   const b = state.bookings.find(x => x.id === id);
@@ -2937,7 +3003,8 @@ function renderDashboard() {
 function renderDailyTable() {
   const tbody = safeEl("giorniTable");
   if (!tbody) return;
-  tbody.innerHTML = state.dailyRecords.map(r=>{
+  const rows = [...state.dailyRecords].sort((a,b) => String(b.data || "").localeCompare(String(a.data || "")));
+  tbody.innerHTML = rows.map(r=>{
     const totals = getDailyTotals(r);
     const alerts = validateDaily(r);
     return `<tr>
@@ -2958,8 +3025,8 @@ function renderDailyTable() {
   document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteDailyByDate(btn.dataset.dayDate)));
 }
 function renderCash() {
-  if (safeEl("cashInitContanti")) $("cashInitContanti").value = state.cashInitial.contanti || 0;
-  if (safeEl("cashInitPos")) $("cashInitPos").value = state.cashInitial.pos || 0;
+  if (safeEl("cashInitContanti")) $("cashInitContanti").value = inputNumberValue(state.cashInitial.contanti);
+  if (safeEl("cashInitPos")) $("cashInitPos").value = inputNumberValue(state.cashInitial.pos);
   ["movCassa", "fornMovCassa", "dipMovCassa", "supplierDetailCassa", "employeeDetailCassa"].forEach(id => fillCashSelect(id, safeEl(id)?.value || "contanti"));
   renderDailyCashInputs();
   if (safeEl("customCashTable")) {
@@ -2989,6 +3056,7 @@ function renderCash() {
 }
 function renderSuppliers() {
   refreshSuppliersDatalist();
+  setupGlobalSearchInputs();
   if (safeEl("fornMovNome") && safeEl("fornMovNome").tagName === "SELECT") {
     $("fornMovNome").innerHTML = state.suppliers.map(s => `<option value="${s.nome}">${escapeHtml(supplierSearchLabel(s))}</option>`).join("");
   }
@@ -3061,10 +3129,9 @@ function renderSupplierDetail() {
   }
 }
 function renderEmployees() {
-  refreshEmployeesDatalist();
-  if (safeEl("dipMovNome") && safeEl("dipMovNome").tagName === "SELECT") {
-    $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${escapeHtml(e.nome)}">${escapeHtml(e.nome)}</option>`).join("");
-  }
+  const empList = safeEl("employeesDatalist");
+  if (empList) empList.innerHTML = (state.employees || []).map(e => `<option value="${escapeHtml(e.nome)}"></option>`).join("");
+  setupGlobalSearchInputs();
   const table = safeEl("dipendentiTable");
   if (!table) return;
   const month = getCurrentMonthPrefix();
@@ -3329,6 +3396,7 @@ function bindEvents() {
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
   safeEl("addDailyEmployeePaymentBtn")?.addEventListener("click", ()=>addDailyEmployeePaymentRow({}));
+  setupGlobalSearchInputs();
   safeEl("supplierDetailMonth")?.addEventListener("change", renderSupplierDetail);
   safeEl("employeeDetailMonth")?.addEventListener("change", renderEmployeeDetail);
   safeEl("refreshBtn")?.addEventListener("click", ()=>refreshData("Dati aggiornati dal cloud."));
