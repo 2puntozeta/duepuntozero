@@ -340,3 +340,22 @@ input[type="checkbox"]{
   .autocomplete-option strong{font-size:17px;}
   .autocomplete-option small{font-size:14px;}
 }
+
+/* V19 report dettagliato e stampa PDF */
+.report-table-wrap{max-height:65vh;overflow:auto;}
+.report-table{font-size:13px;min-width:1500px;}
+.report-table th,.report-table td{white-space:nowrap;}
+.highlight-card{border-color:rgba(34,197,94,.35);box-shadow:0 0 0 1px rgba(34,197,94,.10) inset;}
+@media (max-width: 720px){
+  .report-table{font-size:12px;min-width:1400px;}
+  .day-delete-full-btn,.day-delete-btn{width:100%;}
+}
+@media print{
+  .sidebar,.page-head,#globalFeedback,.nav-btn,.toolbar button,.screen.modal-screen{display:none!important;}
+  .app{display:block!important;}
+  .main{padding:0!important;}
+  .section{display:block!important;}
+  .section:not(#report){display:none!important;}
+  .card{box-shadow:none!important;border:1px solid #ddd!important;}
+  .report-table-wrap{max-height:none!important;overflow:visible!important;}
+}

@@ -34,6 +34,7 @@ let selectedEmployeeDetailId = null;
 let editingSupplierMovementId = null;
 let editingEmployeeMovementId = null;
 let cloudSyncCheckInProgress = false;
+let lastReportPayload = null;
 
 const $ = (id) => document.getElementById(id);
 const safeEl = (id) => document.getElementById(id);
@@ -898,7 +899,7 @@ function employeeMonthStatus(employee, monthPrefix = getCurrentMonthPrefix()) {
 function emptyCashBreakdownRow() {
   return { iniziale: 0, incassi: 0, lordo: 0, commissioni: 0, entrate: 0, uscite: 0, saldo: 0 };
 }
-function computeCashBreakdown() {
+function computeCashBreakdownUntil(toDate = "") {
   const out = {};
   cashNames().forEach(name => {
     out[name] = emptyCashBreakdownRow();
@@ -914,7 +915,9 @@ function computeCashBreakdown() {
     out[c.name].iniziale += n(c.amount);
     out[c.name].startDate = out[c.name].startDate || "";
   });
+  const isBeforeOrAt = (dateStr) => !toDate || !dateStr || String(dateStr).slice(0,10) <= String(toDate).slice(0,10);
   state.dailyRecords.forEach(rec => {
+    if (!isBeforeOrAt(rec?.data)) return;
     cashNames().forEach(name => {
       if (!isOnOrAfterCashStart(rec?.data, name)) return;
       if (!out[name]) out[name] = emptyCashBreakdownRow();
@@ -927,6 +930,7 @@ function computeCashBreakdown() {
     });
   });
   state.cashMovements.forEach(m => {
+    if (!isBeforeOrAt(m?.data)) return;
     const name = m.cassa || "contanti";
     if (!isOnOrAfterCashStart(m?.data, name)) return;
     if (!out[name]) out[name] = emptyCashBreakdownRow();
@@ -937,6 +941,9 @@ function computeCashBreakdown() {
     row.saldo = n(row.iniziale) + n(row.incassi) + n(row.entrate) - n(row.uscite);
   });
   return out;
+}
+function computeCashBreakdown() {
+  return computeCashBreakdownUntil("");
 }
 function computeCashBalances() {
   const breakdown = computeCashBreakdown();
@@ -2404,12 +2411,42 @@ async function saveDaily() {
   await refreshData("Scheda giornaliera salvata.");
 }
 async function deleteDailyByDate(dateStr) {
-  if (!confirm(`Vuoi davvero cancellare la giornata ${dateStr}? Verranno rimossi anche i pagamenti automatici collegati a questa scheda.`)) return;
+  if (!confirm(`Vuoi cancellare la scheda ${dateStr}? Verranno rimossi solo la scheda e i movimenti automatici creati da quella scheda.`)) return;
   try {
     await clearAutoLinkedMovementsForDate(dateStr);
     const { error } = await supabase.from("daily_records").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr);
     if (error) throw error;
-    await refreshData("Giornata cancellata.");
+    await refreshData("Scheda giornaliera cancellata con i movimenti automatici collegati.");
+  } catch (err) {
+    showGlobalMessage(err.message || String(err), "error");
+  }
+}
+async function deleteWholeDayByDate(dateStr) {
+  const msg = `ATTENZIONE: vuoi eliminare TUTTO il giorno ${dateStr}?
+
+Verranno cancellati da Supabase:
+- scheda giornaliera
+- movimenti cassa della data
+- movimenti fornitori della data
+- movimenti dipendenti della data
+
+Non verranno cancellati fornitori e dipendenti come anagrafica.
+
+Usalo solo se vuoi reinserire quella giornata da zero.`;
+  if (!confirm(msg)) return;
+  if (!confirm(`Ultima conferma: eliminare davvero tutto il ${dateStr}?`)) return;
+  try {
+    const tables = ["cash_movements", "supplier_movements", "employee_movements", "daily_records"];
+    for (const table of tables) {
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq("company_id", state.activeCompany.id)
+        .eq("data", dateStr);
+      if (error) throw error;
+    }
+    resetDailyForm();
+    await refreshData(`Giornata ${dateStr} eliminata completamente. Ora puoi reinserirla da zero.`);
   } catch (err) {
     showGlobalMessage(err.message || String(err), "error");
   }
@@ -3055,13 +3092,15 @@ function renderDailyTable() {
       <td>${dailyMetricTotal(r, "menu")} / ${dailyMetricTotal(r, "supplementi")}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}">Alert</button>` : '<span class="ok">OK</span>'}
-        <button class="btn ghost day-delete-btn" data-day-date="${r.data}">Cancella</button>
+        <button class="btn ghost day-delete-btn" data-day-date="${r.data}">Cancella scheda</button>
+        <button class="btn ghost danger-soft day-delete-full-btn" data-day-date="${r.data}">Elimina giorno intero</button>
       </td>
     </tr>`;
   }).join("");
   document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", ()=>openAlertModalByDate(btn.dataset.alertDate)));
   document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", ()=>loadDailyByDate(btn.dataset.dayDate)));
   document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteDailyByDate(btn.dataset.dayDate)));
+  document.querySelectorAll(".day-delete-full-btn").forEach(btn => btn.addEventListener("click", ()=>deleteWholeDayByDate(btn.dataset.dayDate)));
 }
 function renderCash() {
   if (safeEl("cashInitContanti")) $("cashInitContanti").value = inputNumberValue(state.cashInitial.contanti);
@@ -3278,7 +3317,56 @@ function recordsInRange(from, to) {
   const range = reportDateRange(from, to);
   return state.dailyRecords.filter(r => (!range.from || r.data >= range.from) && (!range.to || r.data <= range.to));
 }
-function renderReportFromRecords(records, label = "", rangeOverride = null) {
+function lastDayOfMonth(year, month) {
+  return new Date(Number(year), Number(month), 0).getDate();
+}
+function cashMovementSumsForDate(dateStr, cassa) {
+  const rows = (state.cashMovements || []).filter(m => String(m.data || "") === String(dateStr || "") && String(m.cassa || "contanti") === String(cassa || "contanti"));
+  return {
+    entrate: rows.filter(m => m.tipo === "entrata").reduce((a,b)=>a+n(b.importo),0),
+    uscite: rows.filter(m => m.tipo !== "entrata").reduce((a,b)=>a+n(b.importo),0),
+    count: rows.length,
+  };
+}
+function buildReportRows(records, range) {
+  return [...(records || [])].sort((a,b)=>String(a.data || "").localeCompare(String(b.data || ""))).map(r => {
+    const pranzo = getService(r, "pranzo");
+    const cena = getService(r, "cena");
+    const banchetti = getBanchettiAggregate(r);
+    const contanti = getDailyCashAmount(r, "contanti");
+    const posLordo = getDailyCashAmount(r, "pos");
+    const posCommissioni = getDailyCashFeeAmount(r, "pos");
+    const posNetto = getDailyCashNetAmount(r, "pos");
+    const contantiCash = cashMovementSumsForDate(r.data, "contanti");
+    const posCash = cashMovementSumsForDate(r.data, "pos");
+    const saldoFine = computeCashBreakdownUntil(r.data);
+    return {
+      data: r.data,
+      coperti: dailyMetricTotal(r, "coperti") || getDailyTotals(r).totalCoperti,
+      copertiRistorante: dailyMetricTotal(r, "copertiRistorante"),
+      menu: dailyMetricTotal(r, "menu"),
+      pizze: dailyMetricTotal(r, "pizze"),
+      supplementi: dailyMetricTotal(r, "supplementi"),
+      portate: dailyMetricTotal(r, "portate"),
+      asporto: getDailyAsportoTotal(r),
+      pranzoEuro: n(pranzo.servizio),
+      cenaEuro: n(cena.servizio),
+      banchettiEuro: n(banchetti.servizio),
+      bancone: getDailyBanconeTotal(r),
+      contanti,
+      posLordo,
+      posCommissioni,
+      posNetto,
+      entrateContanti: contantiCash.entrate,
+      usciteContanti: contantiCash.uscite,
+      entratePos: posCash.entrate,
+      uscitePos: posCash.uscite,
+      saldoContanti: saldoFine.contanti?.saldo || 0,
+      saldoPos: saldoFine.pos?.saldo || 0,
+    };
+  });
+}
+function buildReportTotals(records, rangeOverride = null) {
   const servizioTotali = {
     pranzo: emptyService(),
     cena: emptyService(),
@@ -3300,7 +3388,6 @@ function renderReportFromRecords(records, label = "", rangeOverride = null) {
   const cashOutTotal = cashOutRows.reduce((a,b)=>a+n(b.importo),0);
   const unlinkedCashOutRows = cashOutRows.filter(m => cashMovementLooksBusinessRelated(m) && !cashMovementHasAnyBusinessMatch(m));
   const unlinkedCashOutTotal = unlinkedCashOutRows.reduce((a,b)=>a+n(b.importo),0);
-
 
   function addToServiceBucket(bucket, service) {
     SERVICE_NUMBER_FIELDS.forEach(field => { bucket[field] += n(service?.[field]); servizioTotali.totale[field] += n(service?.[field]); });
@@ -3330,10 +3417,64 @@ function renderReportFromRecords(records, label = "", rangeOverride = null) {
     });
   });
 
+  const endBreakdown = computeCashBreakdownUntil(reportRange.to || "");
+  const dayRows = buildReportRows(records, reportRange);
+  return {
+    range: reportRange,
+    servizioTotali,
+    incasso,
+    incassoNetto,
+    commissioni,
+    asporto,
+    bancone,
+    servizioPranzo,
+    servizioCena,
+    servizioBanchetti,
+    cashTotals,
+    cashGrossTotals,
+    cashFees,
+    supplierOutRows,
+    employeeOutRows,
+    supplierOut,
+    employeeOut,
+    totalOut,
+    cashOutRows,
+    cashOutTotal,
+    unlinkedCashOutRows,
+    unlinkedCashOutTotal,
+    endBreakdown,
+    dayRows,
+  };
+}
+function renderReportDayRows(dayRows = []) {
+  const box = safeEl("reportDailyDetail");
+  if (!box) return;
+  if (!dayRows.length) {
+    box.innerHTML = `<div class="alert">Nessuna giornata nel periodo scelto.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="table-wrap report-table-wrap"><table class="report-table"><thead><tr>
+    <th>Data</th><th>Coperti</th><th>Cop. rist.</th><th>Menù</th><th>Pizze</th><th>Suppl.</th><th>Portate</th>
+    <th>Asporto</th><th>Pranzo</th><th>Cena</th><th>Banchetti</th><th>Bancone</th>
+    <th>Contanti inc.</th><th>POS lordo</th><th>SumUp</th><th>POS netto</th>
+    <th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont. fine giorno</th><th>Saldo POS netto fine giorno</th>
+  </tr></thead><tbody>${dayRows.map(row => `<tr>
+    <td>${formatDate(row.data)}</td><td>${row.coperti}</td><td>${row.copertiRistorante}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.supplementi}</td><td>${row.portate}</td>
+    <td>${euro(row.asporto)}</td><td>${euro(row.pranzoEuro)}</td><td>${euro(row.cenaEuro)}</td><td>${euro(row.banchettiEuro)}</td><td>${euro(row.bancone)}</td>
+    <td>${euro(row.contanti)}</td><td>${euro(row.posLordo)}</td><td>${euro(row.posCommissioni)}</td><td>${euro(row.posNetto)}</td>
+    <td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
+  </tr>`).join("")}</tbody></table></div>`;
+}
+function renderReportFromRecords(records, label = "", rangeOverride = null) {
+  const reportRange = rangeOverride || reportDateRange(records[0]?.data || "", records[records.length - 1]?.data || "");
+  const totals = buildReportTotals(records, reportRange);
+  const servizioTotali = totals.servizioTotali;
+  lastReportPayload = { label: label || "Periodo", records: [...records], ...totals };
+
   if (safeEl("rCopPranzo")) $("rCopPranzo").textContent = servizioTotali.pranzo.coperti;
   if (safeEl("rCopCena")) $("rCopCena").textContent = servizioTotali.cena.coperti;
   if (safeEl("rCopBanchetti")) $("rCopBanchetti").textContent = servizioTotali.banchetti.coperti;
-  if (safeEl("rIncasso")) $("rIncasso").textContent = euro(incasso);
+  if (safeEl("rIncasso")) $("rIncasso").textContent = euro(totals.incasso);
 
   const metricCards = [];
   const names = [
@@ -3347,36 +3488,95 @@ function renderReportFromRecords(records, label = "", rangeOverride = null) {
     metricCards.push(`<div class="card inner"><strong>${title} totali</strong><div>${servizioTotali.totale[field]}</div><small>Pranzo ${servizioTotali.pranzo[field]} · Cena ${servizioTotali.cena[field]} · Banchetti ${servizioTotali.banchetti[field]}</small></div>`);
   });
 
+  const rangeText = reportRange.from || reportRange.to ? `${formatDate(reportRange.from)} → ${formatDate(reportRange.to)}` : "Tutto l’archivio";
+  const endCards = Object.entries(totals.endBreakdown).map(([name,row]) => {
+    const title = isPosCash(name) ? "Saldo POS netto a fine periodo" : `Saldo ${cashLabel(name)} a fine periodo`;
+    const details = isPosCash(name)
+      ? `iniziale ${euro(row.iniziale)} · incassi netti ${euro(row.incassi)} · lordo ${euro(row.lordo)} · commissioni ${euro(row.commissioni)} · uscite ${euro(row.uscite)}`
+      : `iniziale ${euro(row.iniziale)} · incassi ${euro(row.incassi)} · uscite ${euro(row.uscite)}`;
+    return `<div class="card inner highlight-card"><strong>${escapeHtml(title)}</strong><div>${euro(row.saldo)}</div><small>${details}</small></div>`;
+  });
+
   if (safeEl("reportSummary")) $("reportSummary").innerHTML = [
-    `<div class="card inner"><strong>${escapeHtml(label || "Periodo")}</strong><div>${records.length} giornate</div></div>`,
+    `<div class="card inner"><strong>${escapeHtml(label || "Periodo")}</strong><div>${records.length} giornate</div><small>${rangeText}</small></div>`,
     `<div class="card inner"><strong>Coperti complessivi</strong><div>${servizioTotali.totale.coperti}</div><small>Pranzo ${servizioTotali.pranzo.coperti} · Cena ${servizioTotali.cena.coperti} · Banchetti ${servizioTotali.banchetti.coperti}</small></div>`,
-    `<div class="card inner"><strong>Incasso lordo</strong><div>${euro(incasso)}</div></div>`,
-    `<div class="card inner"><strong>Incasso netto dopo SumUp</strong><div>${euro(incassoNetto)}</div></div>`,
-    `<div class="card inner"><strong>Commissioni SumUp POS</strong><div>${euro(commissioni)}</div></div>`,
-    `<div class="card inner"><strong>Asporto totale</strong><div>${euro(asporto)}</div></div>`,
-    `<div class="card inner"><strong>Pranzo €</strong><div>${euro(servizioPranzo)}</div></div>`,
-    `<div class="card inner"><strong>Cena €</strong><div>${euro(servizioCena)}</div></div>`,
-    `<div class="card inner"><strong>Banchetti €</strong><div>${euro(servizioBanchetti)}</div></div>`,
-    `<div class="card inner"><strong>Bancone totale</strong><div>${euro(bancone)}</div></div>`,
-    `<div class="card inner"><strong>Uscite fornitori</strong><div>${euro(supplierOut)}</div><small>${supplierOutRows.length} movimenti</small></div>`,
-    `<div class="card inner"><strong>Uscite dipendenti</strong><div>${euro(employeeOut)}</div><small>${employeeOutRows.length} movimenti</small></div>`,
-    `<div class="card inner"><strong>Uscite fornitori + dipendenti</strong><div>${euro(totalOut)}</div></div>`,
-    `<div class="card inner"><strong>Uscite cassa registrate</strong><div>${euro(cashOutTotal)}</div><small>${cashOutRows.length} movimenti cassa in uscita</small></div>`,
-    `<div class="card inner"><strong>Uscite cassa sospette/non collegate</strong><div>${euro(unlinkedCashOutTotal)}</div><small>${unlinkedCashOutRows.length} da verificare</small></div>`,
-    `<div class="card inner"><strong>Incasso netto - uscite cassa</strong><div>${euro(incassoNetto - cashOutTotal)}</div></div>`,
+    `<div class="card inner"><strong>Incasso lordo</strong><div>${euro(totals.incasso)}</div></div>`,
+    `<div class="card inner"><strong>Incasso netto dopo SumUp</strong><div>${euro(totals.incassoNetto)}</div></div>`,
+    `<div class="card inner"><strong>Commissioni SumUp POS</strong><div>${euro(totals.commissioni)}</div></div>`,
+    `<div class="card inner"><strong>Asporto totale</strong><div>${euro(totals.asporto)}</div></div>`,
+    `<div class="card inner"><strong>Pranzo €</strong><div>${euro(totals.servizioPranzo)}</div></div>`,
+    `<div class="card inner"><strong>Cena €</strong><div>${euro(totals.servizioCena)}</div></div>`,
+    `<div class="card inner"><strong>Banchetti €</strong><div>${euro(totals.servizioBanchetti)}</div></div>`,
+    `<div class="card inner"><strong>Bancone totale</strong><div>${euro(totals.bancone)}</div></div>`,
+    `<div class="card inner"><strong>Uscite fornitori</strong><div>${euro(totals.supplierOut)}</div><small>${totals.supplierOutRows.length} movimenti</small></div>`,
+    `<div class="card inner"><strong>Uscite dipendenti</strong><div>${euro(totals.employeeOut)}</div><small>${totals.employeeOutRows.length} movimenti</small></div>`,
+    `<div class="card inner"><strong>Uscite fornitori + dipendenti</strong><div>${euro(totals.totalOut)}</div></div>`,
+    `<div class="card inner"><strong>Uscite cassa registrate</strong><div>${euro(totals.cashOutTotal)}</div><small>${totals.cashOutRows.length} movimenti cassa in uscita</small></div>`,
+    `<div class="card inner"><strong>Uscite cassa sospette/non collegate</strong><div>${euro(totals.unlinkedCashOutTotal)}</div><small>${totals.unlinkedCashOutRows.length} da verificare</small></div>`,
+    `<div class="card inner"><strong>Incasso netto - uscite cassa</strong><div>${euro(totals.incassoNetto - totals.cashOutTotal)}</div></div>`,
     ...metricCards,
-    ...Object.entries(cashTotals).map(([name,total]) => {
-      const extra = isPosCash(name) ? `<small>lordo ${euro(cashGrossTotals[name])} · commissioni ${euro(cashFees[name])}</small>` : "";
-      return `<div class="card inner"><strong>${escapeHtml(isPosCash(name) ? "POS netto" : cashLabel(name))}</strong><div>${euro(total)}</div>${extra}</div>`;
+    ...Object.entries(totals.cashTotals).map(([name,total]) => {
+      const extra = isPosCash(name) ? `<small>lordo ${euro(totals.cashGrossTotals[name])} · commissioni ${euro(totals.cashFees[name])}</small>` : "";
+      return `<div class="card inner"><strong>${escapeHtml(isPosCash(name) ? "POS netto incassato nel periodo" : cashLabel(name) + " incassati nel periodo")}</strong><div>${euro(total)}</div>${extra}</div>`;
     }),
+    ...endCards,
   ].join("");
+  renderReportDayRows(totals.dayRows);
+}
+function buildReportPrintHtml(payload) {
+  if (!payload) return "";
+  const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} → ${formatDate(payload.range.to)}` : "Tutto l’archivio";
+  const endRows = Object.entries(payload.endBreakdown || {}).map(([name,row]) => `<tr><td>${escapeHtml(cashLabel(name))}</td><td>${euro(row.iniziale)}</td><td>${euro(row.incassi)}</td><td>${euro(row.lordo)}</td><td>${euro(row.commissioni)}</td><td>${euro(row.uscite)}</td><td><strong>${euro(row.saldo)}</strong></td></tr>`).join("");
+  const dayRows = (payload.dayRows || []).map(row => `<tr>
+    <td>${formatDate(row.data)}</td><td>${row.coperti}</td><td>${row.copertiRistorante}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.supplementi}</td><td>${row.portate}</td>
+    <td>${euro(row.asporto)}</td><td>${euro(row.pranzoEuro)}</td><td>${euro(row.cenaEuro)}</td><td>${euro(row.banchettiEuro)}</td><td>${euro(row.bancone)}</td>
+    <td>${euro(row.contanti)}</td><td>${euro(row.posLordo)}</td><td>${euro(row.posCommissioni)}</td><td>${euro(row.posNetto)}</td>
+    <td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
+  </tr>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(payload.label)}</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111;margin:24px;font-size:12px}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:22px 0 8px}.muted{color:#555}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}.card{border:1px solid #ddd;border-radius:10px;padding:10px}.card strong{display:block}.value{font-size:18px;font-weight:700;margin-top:4px}table{width:100%;border-collapse:collapse;font-size:10px}th,td{border:1px solid #ddd;padding:5px;text-align:right}th:first-child,td:first-child{text-align:left}th{background:#f1f1f1}.page-break{page-break-before:always}@media print{@page{size:A4 landscape;margin:8mm}body{margin:0}.no-print{display:none}}
+  </style></head><body>
+    <button class="no-print" onclick="window.print()" style="padding:10px 14px;margin-bottom:14px">Stampa / salva PDF</button>
+    <h1>${escapeHtml(payload.label || "Report")}</h1><div class="muted">Periodo: ${rangeText} · generato il ${formatDateTime(new Date().toISOString())}</div>
+    <div class="grid">
+      <div class="card"><strong>Giornate</strong><div class="value">${payload.records.length}</div></div>
+      <div class="card"><strong>Incasso lordo</strong><div class="value">${euro(payload.incasso)}</div></div>
+      <div class="card"><strong>Incasso netto</strong><div class="value">${euro(payload.incassoNetto)}</div></div>
+      <div class="card"><strong>Commissioni SumUp</strong><div class="value">${euro(payload.commissioni)}</div></div>
+      <div class="card"><strong>Coperti</strong><div class="value">${payload.servizioTotali.totale.coperti}</div></div>
+      <div class="card"><strong>Menù</strong><div class="value">${payload.servizioTotali.totale.menu}</div></div>
+      <div class="card"><strong>Pizze</strong><div class="value">${payload.servizioTotali.totale.pizze}</div></div>
+      <div class="card"><strong>Portate</strong><div class="value">${payload.servizioTotali.totale.portate}</div></div>
+    </div>
+    <h2>Saldi casse a fine periodo</h2>
+    <table><thead><tr><th>Cassa</th><th>Iniziale</th><th>Incassi netti</th><th>Lordo</th><th>Commissioni</th><th>Uscite</th><th>Saldo finale</th></tr></thead><tbody>${endRows}</tbody></table>
+    <h2 class="page-break">Dettaglio giorno per giorno</h2>
+    <table><thead><tr><th>Data</th><th>Cop.</th><th>Cop. rist.</th><th>Menù</th><th>Pizze</th><th>Suppl.</th><th>Portate</th><th>Asporto</th><th>Pranzo</th><th>Cena</th><th>Banchetti</th><th>Bancone</th><th>Contanti inc.</th><th>POS lordo</th><th>SumUp</th><th>POS netto</th><th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont.</th><th>Saldo POS</th></tr></thead><tbody>${dayRows}</tbody></table>
+  </body></html>`;
+}
+function exportCurrentReportPdf() {
+  if (!lastReportPayload) {
+    showGlobalMessage("Genera prima un report.", "error");
+    return;
+  }
+  const win = window.open("", "_blank");
+  if (!win) {
+    showGlobalMessage("Popup bloccato: consenti i popup per stampare/salvare il PDF.", "error");
+    return;
+  }
+  win.document.open();
+  win.document.write(buildReportPrintHtml(lastReportPayload));
+  win.document.close();
+  setTimeout(() => { try { win.focus(); win.print(); } catch (err) {} }, 400);
 }
 function runMonthlyReport() {
   const month = String($("reportMonth").value).padStart(2,"0");
   const year = String($("reportYear").value);
   const prefix = `${year}-${month}`;
+  const to = `${prefix}-${String(lastDayOfMonth(year, Number(month))).padStart(2,"0")}`;
   const records = state.dailyRecords.filter(r => r.data.startsWith(prefix));
-  renderReportFromRecords(records, `Report ${month}/${year}`, { from: `${prefix}-01`, to: `${prefix}-31` });
+  renderReportFromRecords(records, `Report ${month}/${year}`, { from: `${prefix}-01`, to });
 }
 function runPeriodReport() {
   const from = safeEl("reportFromDate")?.value || "";
@@ -3384,9 +3584,9 @@ function runPeriodReport() {
   let records;
   let label;
   let range;
-  if (from && !to) { range = reportDateRange(from, ""); records = recordsInRange(from, ""); label = `Dal ${from} all’ultimo dato`; }
-  else if (!from && to) { range = reportDateRange("", to); records = recordsInRange("", to); label = `Dall’inizio al ${to}`; }
-  else if (from && to) { range = reportDateRange(from, to); records = recordsInRange(from, to); label = from === to ? `Giorno ${from}` : `${from} → ${to}`; }
+  if (from && !to) { range = reportDateRange(from, ""); records = recordsInRange(from, ""); label = `Dal ${formatDate(from)} all’ultimo dato`; }
+  else if (!from && to) { range = reportDateRange("", to); records = recordsInRange("", to); label = `Dall’inizio al ${formatDate(to)}`; }
+  else if (from && to) { range = reportDateRange(from, to); records = recordsInRange(from, to); label = from === to ? `Giorno ${formatDate(from)}` : `${formatDate(from)} → ${formatDate(to)}`; }
   else { range = reportDateRange("", ""); records = recordsInRange("", ""); label = "Tutto l’archivio"; }
   renderReportFromRecords(records, label, range);
 }
@@ -3433,6 +3633,7 @@ function bindEvents() {
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
+  safeEl("exportReportPdfBtn")?.addEventListener("click", exportCurrentReportPdf);
   safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
