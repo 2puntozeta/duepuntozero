@@ -3470,6 +3470,24 @@ function buildReportRows(records, range) {
     };
   });
 }
+
+function computeReportPeriodCashBreakdown(reportRange) {
+  const range = reportRange || reportDateRange("", "");
+  const out = {};
+  cashNames().forEach(name => { out[name] = emptyCashBreakdownRow(); });
+  const dates = accountingDatesBetween(range.from || "0000-00-00", range.to || latestAccountingDate(), { includeFrom:true, includeTo:true });
+  Object.entries(out).forEach(([name, row]) => {
+    dates.forEach(d => addCashRows(row, cashDeltaForDate(name, d), 1));
+    const end = computeCashBreakdownUntil(range.to || latestAccountingDate())[name] || emptyCashBreakdownRow();
+    row.saldo = n(end.saldo);
+    // Saldo di partenza del periodo: se conosco il saldo finale e i movimenti del periodo,
+    // ricostruisco a ritroso quanto c'era prima del primo giorno del report.
+    row.iniziale = n(row.saldo) - n(row.incassi) - n(row.entrate) + n(row.uscite);
+    row.startDate = cashStartDate(name);
+  });
+  return out;
+}
+
 function buildReportTotals(records, rangeOverride = null) {
   const servizioTotali = {
     pranzo: emptyService(),
@@ -3521,7 +3539,7 @@ function buildReportTotals(records, rangeOverride = null) {
     });
   });
 
-  const endBreakdown = computeCashBreakdownUntil(reportRange.to || "");
+  const endBreakdown = computeReportPeriodCashBreakdown(reportRange);
   const dayRows = buildReportRows(records, reportRange);
   return {
     range: reportRange,
@@ -3615,7 +3633,7 @@ function renderReportFromRecords(records, label = "", rangeOverride = null) {
     `<div class="card inner"><strong>Uscite fornitori + dipendenti</strong><div>${euro(totals.totalOut)}</div></div>`,
     `<div class="card inner"><strong>Uscite cassa registrate</strong><div>${euro(totals.cashOutTotal)}</div><small>${totals.cashOutRows.length} movimenti cassa in uscita</small></div>`,
     `<div class="card inner"><strong>Uscite cassa sospette/non collegate</strong><div>${euro(totals.unlinkedCashOutTotal)}</div><small>${totals.unlinkedCashOutRows.length} da verificare</small></div>`,
-    `<div class="card inner"><strong>Incasso netto - uscite cassa</strong><div>${euro(totals.incassoNetto - totals.cashOutTotal)}</div></div>`,
+    `<div class="card inner"><strong>Risultato periodo (incassi netti - uscite)</strong><div>${euro(totals.incassoNetto - totals.cashOutTotal)}</div></div>`,
     ...metricCards,
     ...Object.entries(totals.cashTotals).map(([name,total]) => {
       const extra = isPosCash(name) ? `<small>lordo ${euro(totals.cashGrossTotals[name])} · commissioni ${euro(totals.cashFees[name])}</small>` : "";
