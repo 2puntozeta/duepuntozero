@@ -4033,27 +4033,87 @@ function buildReportPdfDocument(payload, mode = "simple") {
   pdf += `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
   return pdf;
 }
-function downloadReportPdf(payload, mode = "simple") {
+function makeReportPdfBlob(payload, mode = "simple") {
   const pdf = buildReportPdfDocument(payload, mode);
-  const blob = new Blob([pdf], { type: "application/pdf" });
+  return new Blob([pdf], { type: "application/pdf" });
+}
+function reportPdfFilename(payload, mode = "simple") {
+  const base = pdfCleanText(payload.label || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
+  return `${base}-${mode === "detailed" ? "dettagliato" : "semplificato"}.pdf`;
+}
+async function downloadReportPdf(payload, mode = "simple") {
+  const blob = makeReportPdfBlob(payload, mode);
+  const filename = reportPdfFilename(payload, mode);
+
+  // iPhone/iPad spesso non rispettano a.download sui blob: prima prova con Condividi/Salva file.
+  try {
+    const file = new File([blob], filename, { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
+      await navigator.share({ files: [file], title: filename, text: "Report gestionale" });
+      return "shared";
+    }
+  } catch (_) {}
+
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const base = pdfCleanText(payload.label || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
   a.href = url;
-  a.download = `${base}-${mode === "detailed" ? "dettagliato" : "semplificato"}.pdf`;
+  a.download = filename;
+  a.rel = "noopener";
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+  // Fallback mobile: se non scarica, aprilo in una nuova scheda così l'utente può salvarlo/condividerlo.
+  const isTouchSmall = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "") || window.innerWidth < 820;
+  if (isTouchSmall) {
+    setTimeout(() => {
+      try { window.open(url, "_blank", "noopener"); } catch (_) {}
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }, 250);
+  } else {
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+  return "download";
 }
-function exportCurrentReportPdf(mode = "simple") {
+function openReportPdf(payload, mode = "simple") {
+  const blob = makeReportPdfBlob(payload, mode);
+  const url = URL.createObjectURL(blob);
+  const opened = window.open(url, "_blank", "noopener");
+  if (!opened) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function exportCurrentReportPdf(mode = "simple") {
   if (!lastReportPayload) { showGlobalMessage("Genera prima un report.", "error"); return; }
   try {
-    downloadReportPdf(lastReportPayload, mode);
-    showGlobalMessage(mode === "detailed" ? "PDF dettagliato scaricato." : "PDF semplificato scaricato.", "ok");
+    const res = await downloadReportPdf(lastReportPayload, mode);
+    showGlobalMessage(res === "shared" ? "PDF pronto: scegli dove salvarlo/condividerlo." : (mode === "detailed" ? "PDF dettagliato scaricato/aperto." : "PDF semplificato scaricato/aperto."), "ok");
   } catch (err) {
     console.error(err);
-    showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
+    try {
+      openReportPdf(lastReportPayload, mode);
+      showGlobalMessage("Il download diretto non è partito: ho aperto il PDF in una nuova scheda.", "ok");
+    } catch (err2) {
+      console.error(err2);
+      showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
+    }
+  }
+}
+function openCurrentReportPdf(mode = "simple") {
+  if (!lastReportPayload) { showGlobalMessage("Genera prima un report.", "error"); return; }
+  try {
+    openReportPdf(lastReportPayload, mode);
+    showGlobalMessage(mode === "detailed" ? "PDF dettagliato aperto." : "PDF semplificato aperto.", "ok");
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage("Non sono riuscito ad aprire il PDF.", "error");
   }
 }
 
@@ -4086,7 +4146,7 @@ function renderAll() {
   renderEmployees();
   renderBookings();
   renderCompaniesAdmin();
-  runMonthlyReport();
+  // Non genero più automaticamente il report all'avvio: su PC/Firefox con molti dati poteva appesantire o bloccare la pagina.
 }
 
 function bindEvents() {
@@ -4122,6 +4182,8 @@ function bindEvents() {
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
   safeEl("exportReportPdfBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
   safeEl("exportReportPdfDetailedBtn")?.addEventListener("click", () => exportCurrentReportPdf("detailed"));
+  safeEl("openReportPdfBtn")?.addEventListener("click", () => openCurrentReportPdf("simple"));
+  safeEl("openReportPdfDetailedBtn")?.addEventListener("click", () => openCurrentReportPdf("detailed"));
   safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
