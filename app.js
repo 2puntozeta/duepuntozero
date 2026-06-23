@@ -63,6 +63,16 @@ function formatDate(v) {
   const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : raw;
 }
+function weekdayName(dateStr, short = false) {
+  const d = new Date(String(dateStr || "").slice(0,10) + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return "";
+  const names = short ? ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"] : ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+  return names[d.getDay()] || "";
+}
+function formatDateWithDay(dateStr, short = false) {
+  const day = weekdayName(dateStr, short);
+  return day ? `${day} ${formatDate(dateStr)}` : formatDate(dateStr);
+}
 function isWeekend(dateStr) {
   const d = new Date(String(dateStr || "").slice(0,10) + "T12:00:00");
   if (Number.isNaN(d.getTime())) return false;
@@ -3552,7 +3562,7 @@ function renderReportDayRows(dayRows = []) {
     <th>Contanti inc.</th><th>POS lordo</th><th>SumUp</th><th>POS netto</th>
     <th>Uscite fornitori</th><th>Uscite dipendenti</th><th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont. fine giorno</th><th>Saldo POS netto fine giorno</th>
   </tr></thead><tbody>${dayRows.map((row, idx) => `<tr class="${isWeekend(row.data) ? 'weekend-row' : (idx % 2 ? 'alt-row' : '')}">
-    <td>${formatDate(row.data)}</td><td>${row.copertiPranzoCena}</td><td>${row.banchettiCount}</td><td>${row.banchettiCoperti}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.portate}</td>
+    <td>${formatDateWithDay(row.data, true)}</td><td>${row.copertiPranzoCena}</td><td>${row.banchettiCount}</td><td>${row.banchettiCoperti}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.portate}</td>
     <td>${euro(row.contanti)}</td><td>${euro(row.posLordo)}</td><td>${euro(row.posCommissioni)}</td><td>${euro(row.posNetto)}</td>
     <td>${euro(row.usciteFornitori)}</td><td>${euro(row.usciteDipendenti)}</td><td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
   </tr>`).join("")}</tbody></table></div>`;
@@ -3620,7 +3630,7 @@ function buildReportPrintHtml(payload) {
   const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} → ${formatDate(payload.range.to)}` : "Tutto l’archivio";
   const endRows = Object.entries(payload.endBreakdown || {}).map(([name,row]) => `<tr><td>${escapeHtml(cashLabel(name))}</td><td>${euro(row.iniziale)}</td><td>${euro(row.incassi)}</td><td>${euro(row.lordo)}</td><td>${euro(row.commissioni)}</td><td>${euro(row.uscite)}</td><td><strong>${euro(row.saldo)}</strong></td></tr>`).join("");
   const dayRows = (payload.dayRows || []).map(row => `<tr>
-    <td>${formatDate(row.data)}</td><td>${row.coperti}</td><td>${row.copertiRistorante}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.supplementi}</td><td>${row.portate}</td>
+    <td>${formatDateWithDay(row.data, true)}</td><td>${row.coperti}</td><td>${row.copertiRistorante}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.supplementi}</td><td>${row.portate}</td>
     <td>${euro(row.asporto)}</td><td>${euro(row.pranzoEuro)}</td><td>${euro(row.cenaEuro)}</td><td>${euro(row.banchettiEuro)}</td><td>${euro(row.bancone)}</td>
     <td>${euro(row.contanti)}</td><td>${euro(row.posLordo)}</td><td>${euro(row.posCommissioni)}</td><td>${euro(row.posNetto)}</td>
     <td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
@@ -3756,56 +3766,75 @@ function buildReportPdfDocument(payload, mode = "simple") {
   y += 6;
 
   if (mode === "detailed") {
-    y = ensureSpace(y, 32, "Dettaglio giornaliero completo");
-    text(margin, y, "Dettaglio giornaliero completo", 12, true); y += 14;
-    const serviceCols = [
-      ["Servizio", 70], ["Cop.", 26], ["Contanti", 54], ["POS lordo", 56], ["SumUp", 42], ["POS netto", 54],
-      ["Asporto", 52], ["Servizio EUR", 58], ["Bancone", 48], ["Pizze", 30], ["Cop.rist", 38], ["Menu", 30], ["Suppl.", 32], ["Portate", 34]
-    ];
-    const tableW = serviceCols.reduce((a,c)=>a+c[1],0);
-    function renderServiceHeader() {
-      headerFill(margin, y - 8, tableW, 13);
-      let hx = margin;
-      serviceCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 2, y, h, 5.8, true, i === 0 ? "left" : "right", 12); hx += w; });
-      y += 8; line(margin, y, margin + tableW, y); y += 7;
+    y = ensureSpace(y, 32, "Report dettagliato giorno per giorno");
+    text(margin, y, "Report dettagliato giorno per giorno", 12, true); y += 14;
+    const bodyW = W - margin * 2;
+    const cols1 = [["Voce", 88], ["Coperti", 52], ["Contanti", 72], ["POS lordo", 72], ["SumUp", 58], ["POS netto", 72], ["Asporto", 68], ["Bancone", 62]];
+    const cols2 = [["Voce", 88], ["Pranzo/Cena/Banchetto EUR", 112], ["Pizze", 52], ["Cop.rist", 60], ["Menu", 52], ["Suppl.", 58], ["Portate", 58]];
+    function colsWidth(cols) { return cols.reduce((a,c)=>a+c[1],0); }
+    function drawCells(cols, vals, bg, fs = 6.2, boldFirst = false) {
+      const totalW = Math.min(colsWidth(cols), bodyW);
+      fillRect(margin, y - 7, totalW, 11, bg);
+      let cx = margin;
+      cols.forEach(([_, w], i) => {
+        const align = i === 0 ? "left" : "right";
+        const tx = i === 0 ? cx + 3 : cx + w - 3;
+        text(tx, y, vals[i] ?? "", fs, i === 0 && boldFirst, align, i === 0 ? 26 : 16);
+        cx += w;
+      });
+      y += 10;
     }
-    function renderServiceRow(label, svc, idx, bg) {
-      const posLordo = n(svc.pos);
+    function drawHeader(cols) {
+      drawCells(cols, cols.map(c => c[0]), "#e5e7eb", 5.8, true);
+    }
+    function isRealBanchetto(b) {
+      return SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || !!String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, "");
+    }
+    function renderServiceBlock(label, svc, idx) {
+      const posLordo = n(svc?.pos);
       const fee = sumupFee(posLordo);
       const posNetto = Math.max(0, posLordo - fee);
-      fillRect(margin, y - 7, tableW, 11, bg || (idx % 2 ? "#f4f4f5" : "#ffffff"));
-      let sx = margin;
-      const vals = [label, n(svc.coperti), pdfMoney(svc.contanti), pdfMoney(posLordo), pdfMoney(fee), pdfMoney(posNetto), pdfMoney(svc.asporto), pdfMoney(svc.servizio), pdfMoney(svc.bancone), n(svc.pizze), n(svc.copertiRistorante), n(svc.menu), n(svc.supplementi), n(svc.portate)];
-      serviceCols.forEach(([_,w], i) => { text(i === 0 ? sx + 2 : sx + w - 2, y, vals[i], 5.8, false, i === 0 ? "left" : "right", i === 0 ? 18 : 12); sx += w; });
-      y += 10;
+      y = ensureSpace(y, 48, "Report dettagliato giorno per giorno");
+      const baseBg = idx % 2 ? "#f8fafc" : "#ffffff";
+      const secondBg = idx % 2 ? "#eef2ff" : "#f4f4f5";
+      drawCells(cols1, [label, n(svc?.coperti), pdfMoney(svc?.contanti), pdfMoney(posLordo), pdfMoney(fee), pdfMoney(posNetto), pdfMoney(svc?.asporto), pdfMoney(svc?.bancone)], baseBg, 6.2, true);
+      drawCells(cols2, ["", pdfMoney(svc?.servizio), n(svc?.pizze), n(svc?.copertiRistorante), n(svc?.menu), n(svc?.supplementi), n(svc?.portate)], secondBg, 6.2, false);
+      y += 2;
     }
     (payload.records || []).sort((a,b)=>String(a.data||"").localeCompare(String(b.data||""))).forEach((rec, dayIdx) => {
       const row = (payload.dayRows || []).find(r => r.data === rec.data) || {};
-      y = ensureSpace(y, 64, "Dettaglio giornaliero completo");
+      const banchetti = (getBanchettiList(rec) || []).filter(isRealBanchetto);
+      const needed = 56 + (banchetti.length * 24);
+      y = ensureSpace(y, Math.min(needed, 120), "Report dettagliato giorno per giorno");
       const bg = dayBg(rec.data, dayIdx);
-      fillRect(margin, y - 8, W - margin * 2, 18, bg);
-      text(margin + 4, y + 3, `${formatDate(rec.data)}${isWeekend(rec.data) ? "  (sabato/domenica)" : ""}`, 9, true);
-      text(W - margin - 4, y + 3, `Fornitori ${pdfMoney(row.usciteFornitori)} · Dipendenti ${pdfMoney(row.usciteDipendenti)} · Saldo cont. ${pdfMoney(row.saldoContanti)} · Saldo POS ${pdfMoney(row.saldoPos)}`, 7, true, "right", 95);
-      y += 18;
-      renderServiceHeader();
-      renderServiceRow("Pranzo", getService(rec, "pranzo"), 0, "#ffffff");
-      renderServiceRow("Cena", getService(rec, "cena"), 1, "#f8fafc");
-      const banchetti = (getBanchettiList(rec) || []).filter(b => SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, ""));
-      if (banchetti.length) banchetti.forEach((b, idx) => renderServiceRow(b.nome || `Banchetto ${idx + 1}`, b, idx + 2, idx % 2 ? "#fff7ed" : "#fffbeb"));
-      y += 4;
+      fillRect(margin, y - 8, bodyW, 22, bg);
+      text(margin + 4, y + 1, formatDateWithDay(rec.data, false), 9.5, true, "left", 36);
+      text(W - margin - 4, y + 1, `Fornitori ${pdfMoney(row.usciteFornitori)} - Dipendenti ${pdfMoney(row.usciteDipendenti)}`, 6.8, true, "right", 54);
+      text(W - margin - 4, y + 11, `Saldo contanti ${pdfMoney(row.saldoContanti)} - Saldo POS netto ${pdfMoney(row.saldoPos)}`, 6.8, true, "right", 62);
+      y += 25;
+      drawHeader(cols1);
+      renderServiceBlock("Pranzo", getService(rec, "pranzo"), 0);
+      renderServiceBlock("Cena", getService(rec, "cena"), 1);
+      if (banchetti.length) {
+        y = ensureSpace(y, 18, "Report dettagliato giorno per giorno");
+        text(margin, y, `Banchetti: ${banchetti.length}`, 8, true); y += 10;
+        drawHeader(cols1);
+        banchetti.forEach((b, idx) => renderServiceBlock(b.nome || `Banchetto ${idx + 1}`, b, idx + 2));
+      }
+      y += 6;
     });
   } else {
     y = ensureSpace(y, 40, "Report semplificato giorno per giorno");
     text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14;
     const dayCols = [
-      ["Data", 52], ["Cop.P+C", 36], ["Contanti", 58], ["POS lordo", 58], ["POS netto", 58], ["Banchetti", 42], ["Cop.banq", 42],
-      ["Fornitori", 58], ["Dipendenti", 58], ["Saldo cont.", 70], ["Saldo POS", 70]
+      ["Data", 82], ["Cop.P+C", 36], ["Contanti", 54], ["POS lordo", 54], ["POS netto", 54], ["Banchetti", 40], ["Cop.banq", 40],
+      ["Fornitori", 54], ["Dipendenti", 54], ["Saldo cont.", 65], ["Saldo POS", 65]
     ];
     const tableW = dayCols.reduce((a,c)=>a+c[1],0);
     function renderDayHeader() {
       headerFill(margin, y - 8, tableW, 13);
       let hx = margin;
-      dayCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 3, y, h, 6.2, true, i === 0 ? "left" : "right", 12); hx += w; });
+      dayCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 3, y, h, 5.8, true, i === 0 ? "left" : "right", i === 0 ? 18 : 12); hx += w; });
       y += 8; line(margin, y, margin + tableW, y); y += 7;
     }
     renderDayHeader();
@@ -3813,8 +3842,8 @@ function buildReportPdfDocument(payload, mode = "simple") {
       if (y + 12 > H - margin) { addPage(); y = margin; text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14; renderDayHeader(); }
       fillRect(margin, y - 7, tableW, 11, dayBg(row.data, idx));
       let dx = margin;
-      const vals = [formatDate(row.data), row.copertiPranzoCena, pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posNetto), row.banchettiCount, row.banchettiCoperti, pdfMoney(row.usciteFornitori), pdfMoney(row.usciteDipendenti), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)];
-      dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 6.2, false, i === 0 ? "left" : "right", i === 0 ? 11 : 12); dx += w; });
+      const vals = [formatDateWithDay(row.data, true), row.copertiPranzoCena, pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posNetto), row.banchettiCount, row.banchettiCoperti, pdfMoney(row.usciteFornitori), pdfMoney(row.usciteDipendenti), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)];
+      dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 5.8, false, i === 0 ? "left" : "right", i === 0 ? 18 : 12); dx += w; });
       y += 10;
     });
   }
