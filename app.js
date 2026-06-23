@@ -63,6 +63,11 @@ function formatDate(v) {
   const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : raw;
 }
+function isWeekend(dateStr) {
+  const d = new Date(String(dateStr || "").slice(0,10) + "T12:00:00");
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getDay() === 0 || d.getDay() === 6;
+}
 function formatDateTime(v) {
   if (!v) return "—";
   const raw = String(v);
@@ -899,11 +904,70 @@ function employeeMonthStatus(employee, monthPrefix = getCurrentMonthPrefix()) {
 function emptyCashBreakdownRow() {
   return { iniziale: 0, incassi: 0, lordo: 0, commissioni: 0, entrate: 0, uscite: 0, saldo: 0 };
 }
+function latestAccountingDate() {
+  const dates = [
+    ...(state.dailyRecords || []).map(r => r.data),
+    ...(state.cashMovements || []).map(m => m.data),
+    ...(state.supplierMovements || []).map(m => m.data),
+    ...(state.employeeMovements || []).map(m => m.data),
+  ].map(d => String(d || "").slice(0,10)).filter(Boolean).sort();
+  return dates[dates.length - 1] || todayStr();
+}
+function isDateBefore(a, b) {
+  if (!a || !b) return false;
+  return String(a).slice(0,10) < String(b).slice(0,10);
+}
+function isDateAfterOrAt(a, b) {
+  if (!a || !b) return true;
+  return String(a).slice(0,10) >= String(b).slice(0,10);
+}
+function cashDeltaForDate(cashName, dateStr) {
+  const row = emptyCashBreakdownRow();
+  const d = String(dateStr || "").slice(0,10);
+  if (!d) return row;
+  (state.dailyRecords || []).forEach(rec => {
+    if (String(rec?.data || "").slice(0,10) !== d) return;
+    const gross = getDailyCashAmount(rec, cashName);
+    const fee = getDailyCashFeeAmount(rec, cashName);
+    const net = getDailyCashNetAmount(rec, cashName);
+    row.lordo += gross;
+    row.commissioni += fee;
+    row.incassi += net;
+  });
+  (state.cashMovements || []).forEach(m => {
+    if (String(m?.data || "").slice(0,10) !== d) return;
+    const name = m.cassa || "contanti";
+    if (name !== cashName) return;
+    if (m.tipo === "entrata") row.entrate += n(m.importo);
+    else row.uscite += n(m.importo);
+  });
+  row.saldo = n(row.incassi) + n(row.entrate) - n(row.uscite);
+  return row;
+}
+function addCashRows(target, source, sign = 1) {
+  target.incassi += sign * n(source.incassi);
+  target.lordo += sign * n(source.lordo);
+  target.commissioni += sign * n(source.commissioni);
+  target.entrate += sign * n(source.entrate);
+  target.uscite += sign * n(source.uscite);
+  return target;
+}
+function accountingDatesBetween(fromDate, toDate, opts = {}) {
+  const from = String(fromDate || "").slice(0,10);
+  const to = String(toDate || "").slice(0,10);
+  if (!from || !to) return [];
+  const includeFrom = !!opts.includeFrom;
+  const includeTo = opts.includeTo !== false;
+  const dates = [
+    ...(state.dailyRecords || []).map(r => r.data),
+    ...(state.cashMovements || []).map(m => m.data),
+  ].map(d => String(d || "").slice(0,10)).filter(Boolean);
+  return [...new Set(dates)].filter(d => (includeFrom ? d >= from : d > from) && (includeTo ? d <= to : d < to)).sort();
+}
 function computeCashBreakdownUntil(toDate = "") {
   const out = {};
-  cashNames().forEach(name => {
-    out[name] = emptyCashBreakdownRow();
-  });
+  const target = toDate ? String(toDate).slice(0,10) : latestAccountingDate();
+  cashNames().forEach(name => { out[name] = emptyCashBreakdownRow(); });
 
   Object.entries(state.cashInitial || {}).forEach(([name, amount]) => {
     if (!out[name]) out[name] = emptyCashBreakdownRow();
@@ -915,29 +979,18 @@ function computeCashBreakdownUntil(toDate = "") {
     out[c.name].iniziale += n(c.amount);
     out[c.name].startDate = out[c.name].startDate || "";
   });
-  const isBeforeOrAt = (dateStr) => !toDate || !dateStr || String(dateStr).slice(0,10) <= String(toDate).slice(0,10);
-  state.dailyRecords.forEach(rec => {
-    if (!isBeforeOrAt(rec?.data)) return;
-    cashNames().forEach(name => {
-      if (!isOnOrAfterCashStart(rec?.data, name)) return;
-      if (!out[name]) out[name] = emptyCashBreakdownRow();
-      const gross = getDailyCashAmount(rec, name);
-      const fee = getDailyCashFeeAmount(rec, name);
-      const net = getDailyCashNetAmount(rec, name);
-      out[name].lordo += gross;
-      out[name].commissioni += fee;
-      out[name].incassi += net;
-    });
-  });
-  state.cashMovements.forEach(m => {
-    if (!isBeforeOrAt(m?.data)) return;
-    const name = m.cassa || "contanti";
-    if (!isOnOrAfterCashStart(m?.data, name)) return;
-    if (!out[name]) out[name] = emptyCashBreakdownRow();
-    if (m.tipo === "entrata") out[name].entrate += n(m.importo);
-    else out[name].uscite += n(m.importo);
-  });
-  Object.values(out).forEach(row => {
+
+  Object.entries(out).forEach(([name, row]) => {
+    const start = cashStartDate(name);
+    if (!target) return;
+    if (!start) {
+      accountingDatesBetween("0000-00-00", target, { includeFrom:false, includeTo:true }).forEach(d => addCashRows(row, cashDeltaForDate(name, d), 1));
+    } else if (target >= start) {
+      accountingDatesBetween(start, target, { includeFrom:true, includeTo:true }).forEach(d => addCashRows(row, cashDeltaForDate(name, d), 1));
+    } else {
+      // Saldo a ritroso: il saldo iniziale è considerato alla chiusura del giorno prima della data di partenza.
+      accountingDatesBetween(target, start, { includeFrom:false, includeTo:false }).forEach(d => addCashRows(row, cashDeltaForDate(name, d), -1));
+    }
     row.saldo = n(row.iniziale) + n(row.incassi) + n(row.entrate) - n(row.uscite);
   });
   return out;
@@ -3328,6 +3381,37 @@ function cashMovementSumsForDate(dateStr, cassa) {
     count: rows.length,
   };
 }
+function businessOutSumsForDate(dateStr) {
+  const d = String(dateStr || "").slice(0,10);
+  const out = {
+    suppliers: 0,
+    employees: 0,
+    suppliersContanti: 0,
+    suppliersPos: 0,
+    employeesContanti: 0,
+    employeesPos: 0,
+    supplierCount: 0,
+    employeeCount: 0,
+  };
+  (state.supplierMovements || []).filter(m => String(m.data || "").slice(0,10) === d && isSupplierPaymentType(m.tipo)).forEach(m => {
+    const amount = n(m.importo);
+    const cash = normalizeSearchText(extractCashFromNote(m.nota || "", "contanti"));
+    out.suppliers += amount; out.supplierCount += 1;
+    if (cash === "pos") out.suppliersPos += amount; else out.suppliersContanti += amount;
+  });
+  (state.employeeMovements || []).filter(m => String(m.data || "").slice(0,10) === d).forEach(m => {
+    const amount = n(m.importo);
+    const cash = normalizeSearchText(extractCashFromNote(m.nota || "", "contanti"));
+    out.employees += amount; out.employeeCount += 1;
+    if (cash === "pos") out.employeesPos += amount; else out.employeesContanti += amount;
+  });
+  return out;
+}
+function countRealBanchetti(rec) {
+  return (getBanchettiList(rec) || []).filter(b => {
+    return SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, "");
+  }).length;
+}
 function buildReportRows(records, range) {
   return [...(records || [])].sort((a,b)=>String(a.data || "").localeCompare(String(b.data || ""))).map(r => {
     const pranzo = getService(r, "pranzo");
@@ -3339,10 +3423,14 @@ function buildReportRows(records, range) {
     const posNetto = getDailyCashNetAmount(r, "pos");
     const contantiCash = cashMovementSumsForDate(r.data, "contanti");
     const posCash = cashMovementSumsForDate(r.data, "pos");
+    const businessOut = businessOutSumsForDate(r.data);
     const saldoFine = computeCashBreakdownUntil(r.data);
     return {
       data: r.data,
       coperti: dailyMetricTotal(r, "coperti") || getDailyTotals(r).totalCoperti,
+      copertiPranzoCena: n(pranzo.coperti) + n(cena.coperti),
+      banchettiCount: countRealBanchetti(r),
+      banchettiCoperti: n(banchetti.coperti),
       copertiRistorante: dailyMetricTotal(r, "copertiRistorante"),
       menu: dailyMetricTotal(r, "menu"),
       pizze: dailyMetricTotal(r, "pizze"),
@@ -3361,6 +3449,12 @@ function buildReportRows(records, range) {
       usciteContanti: contantiCash.uscite,
       entratePos: posCash.entrate,
       uscitePos: posCash.uscite,
+      usciteFornitori: businessOut.suppliers,
+      usciteDipendenti: businessOut.employees,
+      usciteFornitoriContanti: businessOut.suppliersContanti,
+      usciteFornitoriPos: businessOut.suppliersPos,
+      usciteDipendentiContanti: businessOut.employeesContanti,
+      usciteDipendentiPos: businessOut.employeesPos,
       saldoContanti: saldoFine.contanti?.saldo || 0,
       saldoPos: saldoFine.pos?.saldo || 0,
     };
@@ -3454,15 +3548,13 @@ function renderReportDayRows(dayRows = []) {
     return;
   }
   box.innerHTML = `<div class="table-wrap report-table-wrap"><table class="report-table"><thead><tr>
-    <th>Data</th><th>Coperti</th><th>Cop. rist.</th><th>Menù</th><th>Pizze</th><th>Suppl.</th><th>Portate</th>
-    <th>Asporto</th><th>Pranzo</th><th>Cena</th><th>Banchetti</th><th>Bancone</th>
+    <th>Data</th><th>Coperti P+C</th><th>Banchetti</th><th>Cop. banchetti</th><th>Menù</th><th>Pizze</th><th>Portate</th>
     <th>Contanti inc.</th><th>POS lordo</th><th>SumUp</th><th>POS netto</th>
-    <th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont. fine giorno</th><th>Saldo POS netto fine giorno</th>
-  </tr></thead><tbody>${dayRows.map(row => `<tr>
-    <td>${formatDate(row.data)}</td><td>${row.coperti}</td><td>${row.copertiRistorante}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.supplementi}</td><td>${row.portate}</td>
-    <td>${euro(row.asporto)}</td><td>${euro(row.pranzoEuro)}</td><td>${euro(row.cenaEuro)}</td><td>${euro(row.banchettiEuro)}</td><td>${euro(row.bancone)}</td>
+    <th>Uscite fornitori</th><th>Uscite dipendenti</th><th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont. fine giorno</th><th>Saldo POS netto fine giorno</th>
+  </tr></thead><tbody>${dayRows.map((row, idx) => `<tr class="${isWeekend(row.data) ? 'weekend-row' : (idx % 2 ? 'alt-row' : '')}">
+    <td>${formatDate(row.data)}</td><td>${row.copertiPranzoCena}</td><td>${row.banchettiCount}</td><td>${row.banchettiCoperti}</td><td>${row.menu}</td><td>${row.pizze}</td><td>${row.portate}</td>
     <td>${euro(row.contanti)}</td><td>${euro(row.posLordo)}</td><td>${euro(row.posCommissioni)}</td><td>${euro(row.posNetto)}</td>
-    <td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
+    <td>${euro(row.usciteFornitori)}</td><td>${euro(row.usciteDipendenti)}</td><td>${euro(row.usciteContanti)}</td><td>${euro(row.uscitePos)}</td><td>${euro(row.saldoContanti)}</td><td>${euro(row.saldoPos)}</td>
   </tr>`).join("")}</tbody></table></div>`;
 }
 function renderReportFromRecords(records, label = "", rangeOverride = null) {
@@ -3573,108 +3665,159 @@ function pdfMoney(value) {
 function pdfEscape(value) {
   return pdfCleanText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
-function buildReportPdfDocument(payload) {
-  const W = 842; // A4 landscape in points
+function buildReportPdfDocument(payload, mode = "simple") {
+  const W = 842; // A4 landscape
   const H = 595;
-  const margin = 22;
+  const margin = 20;
   const pages = [];
   let ops = [];
   function addPage() { ops = []; pages.push(ops); }
   function py(y) { return H - y; }
-  function text(x, y, str, size = 8, bold = false, align = "left") {
-    const clean = pdfEscape(str);
+  function color(hex) {
+    const clean = String(hex || "#ffffff").replace("#", "");
+    const r = parseInt(clean.slice(0,2), 16) / 255;
+    const g = parseInt(clean.slice(2,4), 16) / 255;
+    const b = parseInt(clean.slice(4,6), 16) / 255;
+    return [r,g,b].map(v => Number.isFinite(v) ? v.toFixed(3) : "0").join(" ");
+  }
+  function fillRect(x, y, w, h, hex) {
+    ops.push(`${color(hex)} rg ${x.toFixed(2)} ${py(y + h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f 0 0 0 rg`);
+  }
+  function line(x1, y1, x2, y2, hex = "#d4d4d8") {
+    ops.push(`${color(hex)} RG ${x1.toFixed(2)} ${py(y1).toFixed(2)} m ${x2.toFixed(2)} ${py(y2).toFixed(2)} l S 0 0 0 RG`);
+  }
+  function text(x, y, str, size = 7, bold = false, align = "left", maxChars = 0) {
+    let clean = pdfEscape(str);
+    if (maxChars && clean.length > maxChars) clean = clean.slice(0, Math.max(0, maxChars - 1)) + "…";
     const approxWidth = clean.length * size * 0.46;
     const tx = align === "right" ? Math.max(margin, x - approxWidth) : x;
     ops.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${tx.toFixed(2)} ${py(y).toFixed(2)} Td (${clean}) Tj ET`);
-  }
-  function line(x1, y1, x2, y2) {
-    ops.push(`${x1.toFixed(2)} ${py(y1).toFixed(2)} m ${x2.toFixed(2)} ${py(y2).toFixed(2)} l S`);
-  }
-  function rect(x, y, w, h) {
-    ops.push(`${x.toFixed(2)} ${py(y + h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re S`);
   }
   function ensureSpace(y, needed, title) {
     if (y + needed <= H - margin) return y;
     addPage();
     let ny = margin;
-    if (title) { text(margin, ny, title, 13, true); ny += 18; line(margin, ny, W - margin, ny); ny += 10; }
+    if (title) { text(margin, ny, title, 13, true); ny += 15; line(margin, ny, W - margin, ny); ny += 9; }
     return ny;
   }
-
+  function dayBg(dateStr, idx) { return isWeekend(dateStr) ? "#fee2e2" : (idx % 2 ? "#f4f4f5" : "#ffffff"); }
+  function headerFill(x, y, w, h) { fillRect(x, y, w, h, "#e5e7eb"); }
+  function labelForMode() { return mode === "detailed" ? "PDF dettagliato" : "PDF semplificato"; }
   const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} - ${formatDate(payload.range.to)}` : "Tutto l'archivio";
+
   addPage();
   let y = margin;
-  text(margin, y, payload.label || "Report", 18, true); y += 16;
-  text(margin, y, `Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`, 9); y += 16;
-  line(margin, y, W - margin, y); y += 14;
+  text(margin, y, `${payload.label || "Report"} - ${labelForMode()}`, 17, true); y += 15;
+  text(margin, y, `Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`, 8); y += 13;
+  line(margin, y, W - margin, y); y += 10;
 
   const summary = [
     ["Giornate", payload.records?.length || 0],
     ["Incasso lordo", pdfMoney(payload.incasso)],
     ["Incasso netto", pdfMoney(payload.incassoNetto)],
     ["Commissioni SumUp", pdfMoney(payload.commissioni)],
-    ["Coperti", payload.servizioTotali?.totale?.coperti || 0],
+    ["Coperti totali", payload.servizioTotali?.totale?.coperti || 0],
     ["Menu", payload.servizioTotali?.totale?.menu || 0],
     ["Pizze", payload.servizioTotali?.totale?.pizze || 0],
     ["Portate", payload.servizioTotali?.totale?.portate || 0],
+    ["Uscite fornitori", pdfMoney(payload.supplierOut)],
+    ["Uscite dipendenti", pdfMoney(payload.employeeOut)],
     ["Asporto", pdfMoney(payload.asporto)],
-    ["Pranzo", pdfMoney(payload.servizioPranzo)],
-    ["Cena", pdfMoney(payload.servizioCena)],
-    ["Banchetti", pdfMoney(payload.servizioBanchetti)],
+    ["Bancone", pdfMoney(payload.bancone)],
   ];
   const cardW = (W - margin * 2 - 18) / 4;
   summary.forEach((item, idx) => {
     const col = idx % 4;
     const row = Math.floor(idx / 4);
     const x = margin + col * (cardW + 6);
-    const yy = y + row * 42;
-    rect(x, yy, cardW, 34);
-    text(x + 6, yy + 11, item[0], 7, false);
-    text(x + 6, yy + 25, item[1], 11, true);
+    const yy = y + row * 34;
+    fillRect(x, yy, cardW, 28, "#f8fafc");
+    line(x, yy, x + cardW, yy, "#cbd5e1"); line(x, yy + 28, x + cardW, yy + 28, "#cbd5e1");
+    text(x + 5, yy + 10, item[0], 6.5, false, "left", 28);
+    text(x + 5, yy + 22, item[1], 9, true, "left", 28);
   });
-  y += Math.ceil(summary.length / 4) * 42 + 10;
+  y += Math.ceil(summary.length / 4) * 34 + 8;
 
-  y = ensureSpace(y, 95, "Saldi casse a fine periodo");
-  text(margin, y, "Saldi casse a fine periodo", 13, true); y += 14;
-  const cashCols = [
-    ["Cassa", 95], ["Iniziale", 75], ["Incassi netti", 90], ["Lordo", 75], ["Commissioni", 75], ["Uscite", 75], ["Saldo finale", 85]
-  ];
+  y = ensureSpace(y, 70, "Saldi casse a fine periodo");
+  text(margin, y, "Saldi casse a fine periodo", 12, true); y += 12;
+  const cashCols = [["Cassa", 90], ["Iniziale", 70], ["Incassi netti", 85], ["Lordo", 70], ["Commissioni", 70], ["Uscite", 75], ["Saldo finale", 85]];
+  headerFill(margin, y - 8, cashCols.reduce((a,c)=>a+c[1],0), 13);
   let x = margin;
-  cashCols.forEach(([h,w]) => { text(x + 2, y, h, 7, true); x += w; });
-  y += 8; line(margin, y, W - margin, y); y += 10;
-  Object.entries(payload.endBreakdown || {}).forEach(([name,row]) => {
-    y = ensureSpace(y, 12, "Saldi casse a fine periodo");
+  cashCols.forEach(([h,w], i) => { text(i === 0 ? x + 2 : x + w - 3, y, h, 6.5, true, i === 0 ? "left" : "right"); x += w; });
+  y += 8; line(margin, y, W - margin, y); y += 7;
+  Object.entries(payload.endBreakdown || {}).forEach(([name,row], idx) => {
+    y = ensureSpace(y, 11, "Saldi casse a fine periodo");
+    fillRect(margin, y - 7, cashCols.reduce((a,c)=>a+c[1],0), 11, idx % 2 ? "#f4f4f5" : "#ffffff");
     let cx = margin;
     const vals = [cashLabel(name), pdfMoney(row.iniziale), pdfMoney(row.incassi), pdfMoney(row.lordo), pdfMoney(row.commissioni), pdfMoney(row.uscite), pdfMoney(row.saldo)];
-    cashCols.forEach(([_,w], i) => { text(i === 0 ? cx + 2 : cx + w - 4, y, vals[i], 7, i === 6, i === 0 ? "left" : "right"); cx += w; });
+    cashCols.forEach(([_,w], i) => { text(i === 0 ? cx + 2 : cx + w - 3, y, vals[i], 6.5, i === 6, i === 0 ? "left" : "right", i === 0 ? 18 : 14); cx += w; });
     y += 10;
   });
-  y += 10;
+  y += 6;
 
-  y = ensureSpace(y, 60, "Dettaglio giorno per giorno");
-  text(margin, y, "Dettaglio giorno per giorno", 13, true); y += 14;
-  const dayCols = [
-    ["Data", 54], ["Cop.", 28], ["Menu", 30], ["Pizze", 32], ["Port.", 32],
-    ["Contanti", 58], ["POS lordo", 58], ["SumUp", 48], ["POS netto", 58],
-    ["Usc.cont.", 58], ["Usc.POS", 54], ["Saldo cont.", 65], ["Saldo POS", 65]
-  ];
-  function renderDayHeader() {
-    let hx = margin;
-    dayCols.forEach(([h,w]) => { text(hx + (h === "Data" ? 2 : w - 3), y, h, 6.5, true, h === "Data" ? "left" : "right"); hx += w; });
-    y += 8; line(margin, y, W - margin, y); y += 8;
-  }
-  renderDayHeader();
-  (payload.dayRows || []).forEach(row => {
-    if (y + 12 > H - margin) { addPage(); y = margin; text(margin, y, "Dettaglio giorno per giorno", 13, true); y += 14; renderDayHeader(); }
-    let dx = margin;
-    const vals = [
-      formatDate(row.data), row.coperti, row.menu, row.pizze, row.portate,
-      pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posCommissioni), pdfMoney(row.posNetto),
-      pdfMoney(row.usciteContanti), pdfMoney(row.uscitePos), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)
+  if (mode === "detailed") {
+    y = ensureSpace(y, 32, "Dettaglio giornaliero completo");
+    text(margin, y, "Dettaglio giornaliero completo", 12, true); y += 14;
+    const serviceCols = [
+      ["Servizio", 70], ["Cop.", 26], ["Contanti", 54], ["POS lordo", 56], ["SumUp", 42], ["POS netto", 54],
+      ["Asporto", 52], ["Servizio EUR", 58], ["Bancone", 48], ["Pizze", 30], ["Cop.rist", 38], ["Menu", 30], ["Suppl.", 32], ["Portate", 34]
     ];
-    dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 6.5, false, i === 0 ? "left" : "right"); dx += w; });
-    y += 10;
-  });
+    const tableW = serviceCols.reduce((a,c)=>a+c[1],0);
+    function renderServiceHeader() {
+      headerFill(margin, y - 8, tableW, 13);
+      let hx = margin;
+      serviceCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 2, y, h, 5.8, true, i === 0 ? "left" : "right", 12); hx += w; });
+      y += 8; line(margin, y, margin + tableW, y); y += 7;
+    }
+    function renderServiceRow(label, svc, idx, bg) {
+      const posLordo = n(svc.pos);
+      const fee = sumupFee(posLordo);
+      const posNetto = Math.max(0, posLordo - fee);
+      fillRect(margin, y - 7, tableW, 11, bg || (idx % 2 ? "#f4f4f5" : "#ffffff"));
+      let sx = margin;
+      const vals = [label, n(svc.coperti), pdfMoney(svc.contanti), pdfMoney(posLordo), pdfMoney(fee), pdfMoney(posNetto), pdfMoney(svc.asporto), pdfMoney(svc.servizio), pdfMoney(svc.bancone), n(svc.pizze), n(svc.copertiRistorante), n(svc.menu), n(svc.supplementi), n(svc.portate)];
+      serviceCols.forEach(([_,w], i) => { text(i === 0 ? sx + 2 : sx + w - 2, y, vals[i], 5.8, false, i === 0 ? "left" : "right", i === 0 ? 18 : 12); sx += w; });
+      y += 10;
+    }
+    (payload.records || []).sort((a,b)=>String(a.data||"").localeCompare(String(b.data||""))).forEach((rec, dayIdx) => {
+      const row = (payload.dayRows || []).find(r => r.data === rec.data) || {};
+      y = ensureSpace(y, 64, "Dettaglio giornaliero completo");
+      const bg = dayBg(rec.data, dayIdx);
+      fillRect(margin, y - 8, W - margin * 2, 18, bg);
+      text(margin + 4, y + 3, `${formatDate(rec.data)}${isWeekend(rec.data) ? "  (sabato/domenica)" : ""}`, 9, true);
+      text(W - margin - 4, y + 3, `Fornitori ${pdfMoney(row.usciteFornitori)} · Dipendenti ${pdfMoney(row.usciteDipendenti)} · Saldo cont. ${pdfMoney(row.saldoContanti)} · Saldo POS ${pdfMoney(row.saldoPos)}`, 7, true, "right", 95);
+      y += 18;
+      renderServiceHeader();
+      renderServiceRow("Pranzo", getService(rec, "pranzo"), 0, "#ffffff");
+      renderServiceRow("Cena", getService(rec, "cena"), 1, "#f8fafc");
+      const banchetti = (getBanchettiList(rec) || []).filter(b => SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, ""));
+      if (banchetti.length) banchetti.forEach((b, idx) => renderServiceRow(b.nome || `Banchetto ${idx + 1}`, b, idx + 2, idx % 2 ? "#fff7ed" : "#fffbeb"));
+      y += 4;
+    });
+  } else {
+    y = ensureSpace(y, 40, "Report semplificato giorno per giorno");
+    text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14;
+    const dayCols = [
+      ["Data", 52], ["Cop.P+C", 36], ["Contanti", 58], ["POS lordo", 58], ["POS netto", 58], ["Banchetti", 42], ["Cop.banq", 42],
+      ["Fornitori", 58], ["Dipendenti", 58], ["Saldo cont.", 70], ["Saldo POS", 70]
+    ];
+    const tableW = dayCols.reduce((a,c)=>a+c[1],0);
+    function renderDayHeader() {
+      headerFill(margin, y - 8, tableW, 13);
+      let hx = margin;
+      dayCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 3, y, h, 6.2, true, i === 0 ? "left" : "right", 12); hx += w; });
+      y += 8; line(margin, y, margin + tableW, y); y += 7;
+    }
+    renderDayHeader();
+    (payload.dayRows || []).forEach((row, idx) => {
+      if (y + 12 > H - margin) { addPage(); y = margin; text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14; renderDayHeader(); }
+      fillRect(margin, y - 7, tableW, 11, dayBg(row.data, idx));
+      let dx = margin;
+      const vals = [formatDate(row.data), row.copertiPranzoCena, pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posNetto), row.banchettiCount, row.banchettiCoperti, pdfMoney(row.usciteFornitori), pdfMoney(row.usciteDipendenti), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)];
+      dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 6.2, false, i === 0 ? "left" : "right", i === 0 ? 11 : 12); dx += w; });
+      y += 10;
+    });
+  }
 
   const objects = [];
   function addObj(content) { objects.push(content); return objects.length; }
@@ -3690,40 +3833,36 @@ function buildReportPdfDocument(payload) {
     pageIds.push(pageId);
   });
   objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
-
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
-  objects.forEach((obj, i) => {
-    offsets.push(pdf.length);
-    pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`;
-  });
+  objects.forEach((obj, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`; });
   const xrefStart = pdf.length;
   pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (let i = 1; i <= objects.length; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
   return pdf;
 }
-function downloadReportPdf(payload) {
-  const pdf = buildReportPdfDocument(payload);
+function downloadReportPdf(payload, mode = "simple") {
+  const pdf = buildReportPdfDocument(payload, mode);
   const blob = new Blob([pdf], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   const base = pdfCleanText(payload.label || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
   a.href = url;
-  a.download = `${base}.pdf`;
+  a.download = `${base}-${mode === "detailed" ? "dettagliato" : "semplificato"}.pdf`;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
-function exportCurrentReportPdf() {
+function exportCurrentReportPdf(mode = "simple") {
   if (!lastReportPayload) {
     showGlobalMessage("Genera prima un report.", "error");
     return;
   }
   try {
-    downloadReportPdf(lastReportPayload);
-    showGlobalMessage("PDF del report scaricato.", "ok");
+    downloadReportPdf(lastReportPayload, mode);
+    showGlobalMessage(mode === "detailed" ? "PDF dettagliato scaricato." : "PDF semplificato scaricato.", "ok");
   } catch (err) {
     console.error(err);
     showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
@@ -3792,7 +3931,9 @@ function bindEvents() {
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
-  safeEl("exportReportPdfBtn")?.addEventListener("click", exportCurrentReportPdf);
+  safeEl("exportReportPdfBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
+  safeEl("exportReportPdfSimpleBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
+  safeEl("exportReportPdfDetailedBtn")?.addEventListener("click", () => exportCurrentReportPdf("detailed"));
   safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
