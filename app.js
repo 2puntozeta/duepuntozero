@@ -3491,9 +3491,11 @@ function renderReportFromRecords(records, label = "", rangeOverride = null) {
   const rangeText = reportRange.from || reportRange.to ? `${formatDate(reportRange.from)} → ${formatDate(reportRange.to)}` : "Tutto l’archivio";
   const endCards = Object.entries(totals.endBreakdown).map(([name,row]) => {
     const title = isPosCash(name) ? "Saldo POS netto a fine periodo" : `Saldo ${cashLabel(name)} a fine periodo`;
+    const anchorText = row.startDate ? `saldo certo ${euro(row.iniziale)} al ${formatDate(row.startDate)}` : `saldo iniziale ${euro(row.iniziale)}`;
+    const directionText = row.mode === "backward-from-anchor" ? " · calcolato a ritroso" : "";
     const details = isPosCash(name)
-      ? `iniziale ${euro(row.iniziale)} · incassi netti ${euro(row.incassi)} · lordo ${euro(row.lordo)} · commissioni ${euro(row.commissioni)} · uscite ${euro(row.uscite)}`
-      : `iniziale ${euro(row.iniziale)} · incassi ${euro(row.incassi)} · uscite ${euro(row.uscite)}`;
+      ? `${anchorText}${directionText} · lordo ${euro(row.lordo)} · commissioni ${euro(row.commissioni)} · uscite ${euro(row.uscite)}`
+      : `${anchorText}${directionText} · incassi ${euro(row.incassi)} · uscite ${euro(row.uscite)}`;
     return `<div class="card inner highlight-card"><strong>${escapeHtml(title)}</strong><div>${euro(row.saldo)}</div><small>${details}</small></div>`;
   });
 
@@ -3729,6 +3731,332 @@ function exportCurrentReportPdf() {
     showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
   }
 }
+
+
+/* V21: report PC leggibile, PDF semplificato/dettagliato, saldi calcolati anche a ritroso */
+function latestAccountingDate() {
+  const dates = [
+    ...(state.dailyRecords || []).map(r => r.data),
+    ...(state.cashMovements || []).map(m => m.data),
+    ...(state.supplierMovements || []).map(m => m.data),
+    ...(state.employeeMovements || []).map(m => m.data),
+  ].filter(Boolean).map(d => String(d).slice(0,10)).sort();
+  return dates[dates.length - 1] || todayStr();
+}
+function compareDateStr(a, b) {
+  const aa = String(a || "").slice(0,10);
+  const bb = String(b || "").slice(0,10);
+  if (!aa && !bb) return 0;
+  if (!aa) return -1;
+  if (!bb) return 1;
+  return aa.localeCompare(bb);
+}
+function cashNetPiecesBetween(cashName, fromExclusive = "", toInclusive = "") {
+  const out = { lordo:0, commissioni:0, incassi:0, entrate:0, uscite:0 };
+  const inRange = (dateStr) => {
+    const d = String(dateStr || "").slice(0,10);
+    if (!d) return false;
+    if (fromExclusive && compareDateStr(d, fromExclusive) <= 0) return false;
+    if (toInclusive && compareDateStr(d, toInclusive) > 0) return false;
+    return true;
+  };
+  (state.dailyRecords || []).forEach(rec => {
+    if (!inRange(rec?.data)) return;
+    const gross = getDailyCashAmount(rec, cashName);
+    const fee = getDailyCashFeeAmount(rec, cashName);
+    const net = getDailyCashNetAmount(rec, cashName);
+    out.lordo += gross;
+    out.commissioni += fee;
+    out.incassi += net;
+  });
+  (state.cashMovements || []).forEach(m => {
+    if (!inRange(m?.data)) return;
+    const name = m.cassa || "contanti";
+    if (String(name) !== String(cashName)) return;
+    if (m.tipo === "entrata") out.entrate += n(m.importo);
+    else out.uscite += n(m.importo);
+  });
+  return out;
+}
+function cashPiecesNet(pieces) {
+  return n(pieces.incassi) + n(pieces.entrate) - n(pieces.uscite);
+}
+function anchorAmountForCash(name) {
+  if (Object.prototype.hasOwnProperty.call(state.cashInitial || {}, name)) return n(state.cashInitial[name]);
+  const custom = (state.customCashes || []).find(c => String(c.name) === String(name));
+  return n(custom?.amount);
+}
+function computeCashBreakdownUntil(toDate = "") {
+  const target = String(toDate || latestAccountingDate()).slice(0,10);
+  const out = {};
+  cashNames().forEach(name => {
+    const row = emptyCashBreakdownRow();
+    row.startDate = cashStartDate(name);
+    row.iniziale = anchorAmountForCash(name);
+    const ref = row.startDate;
+    if (!ref) {
+      const pieces = cashNetPiecesBetween(name, "", target);
+      row.lordo = pieces.lordo;
+      row.commissioni = pieces.commissioni;
+      row.incassi = pieces.incassi;
+      row.entrate = pieces.entrate;
+      row.uscite = pieces.uscite;
+      row.saldo = n(row.iniziale) + cashPiecesNet(pieces);
+      row.mode = "forward-no-date";
+    } else if (compareDateStr(target, ref) === 0) {
+      row.saldo = n(row.iniziale);
+      row.mode = "anchor";
+    } else if (compareDateStr(target, ref) > 0) {
+      const pieces = cashNetPiecesBetween(name, ref, target);
+      row.lordo = pieces.lordo;
+      row.commissioni = pieces.commissioni;
+      row.incassi = pieces.incassi;
+      row.entrate = pieces.entrate;
+      row.uscite = pieces.uscite;
+      row.saldo = n(row.iniziale) + cashPiecesNet(pieces);
+      row.mode = "forward-from-anchor";
+    } else {
+      const pieces = cashNetPiecesBetween(name, target, ref);
+      row.lordo = -pieces.lordo;
+      row.commissioni = -pieces.commissioni;
+      row.incassi = -pieces.incassi;
+      row.entrate = -pieces.entrate;
+      row.uscite = -pieces.uscite;
+      row.saldo = n(row.iniziale) - cashPiecesNet(pieces);
+      row.mode = "backward-from-anchor";
+    }
+    out[name] = row;
+  });
+  return out;
+}
+function computeCashBreakdown() {
+  return computeCashBreakdownUntil("");
+}
+function computeCashBalances() {
+  const breakdown = computeCashBreakdown();
+  return Object.fromEntries(Object.entries(breakdown).map(([name,row]) => [name, row.saldo]));
+}
+function reportServiceInfo(label, service) {
+  const s = normalizeService(service || {});
+  const posLordo = n(s.pos);
+  const posCommissioni = sumupFee(posLordo);
+  const posNetto = Math.max(0, posLordo - posCommissioni);
+  return {
+    label,
+    coperti:n(s.coperti),
+    contanti:n(s.contanti),
+    posLordo,
+    posCommissioni,
+    posNetto,
+    asporto:n(s.asporto),
+    servizio:n(s.servizio),
+    bancone:n(s.bancone),
+    pizze:n(s.pizze),
+    copertiRistorante:n(s.copertiRistorante),
+    menu:n(s.menu),
+    supplementi:n(s.supplementi),
+    portate:n(s.portate),
+  };
+}
+function serviceInfoHtml(info, servizioLabel = "Servizio") {
+  const rows = [
+    ["Coperti", info.coperti], ["Contanti", euro(info.contanti)], ["POS lordo", euro(info.posLordo)], ["POS netto", euro(info.posNetto)],
+    ["Asporto", euro(info.asporto)], [servizioLabel, euro(info.servizio)], ["Bancone", euro(info.bancone)], ["Pizze", info.pizze],
+    ["Coperti rist.", info.copertiRistorante], ["Menù", info.menu], ["Supplementi", info.supplementi], ["Portate", info.portate]
+  ];
+  return `<div class="report-service-card"><h5>${escapeHtml(info.label)}</h5>${rows.map(([k,v]) => `<div><span>${escapeHtml(k)}</span><strong>${v}</strong></div>`).join("")}</div>`;
+}
+function buildReportRows(records, range) {
+  return [...(records || [])].sort((a,b)=>String(a.data || "").localeCompare(String(b.data || ""))).map(r => {
+    const pranzo = reportServiceInfo("Pranzo", getService(r, "pranzo"));
+    const cena = reportServiceInfo("Cena", getService(r, "cena"));
+    const banchettiList = getBanchettiList(r).map((b,i) => reportServiceInfo(b.nome || `Banchetto ${i+1}`, b));
+    const banchettiAgg = reportServiceInfo("Totale banchetti", getBanchettiAggregate(r));
+    const contanti = getDailyCashAmount(r, "contanti");
+    const posLordo = getDailyCashAmount(r, "pos");
+    const posCommissioni = getDailyCashFeeAmount(r, "pos");
+    const posNetto = getDailyCashNetAmount(r, "pos");
+    const contantiCash = cashMovementSumsForDate(r.data, "contanti");
+    const posCash = cashMovementSumsForDate(r.data, "pos");
+    const saldoFine = computeCashBreakdownUntil(r.data);
+    const copertiPranzoCena = n(pranzo.coperti) + n(cena.coperti);
+    return {
+      data: r.data,
+      pranzo,
+      cena,
+      banchettiList,
+      banchettiAgg,
+      banchettiCount: banchettiList.filter(b => Object.values(b).some(v => typeof v === "number" && n(v) > 0)).length,
+      coperti: dailyMetricTotal(r, "coperti") || getDailyTotals(r).totalCoperti,
+      copertiPranzoCena,
+      copertiBanchetti: n(banchettiAgg.coperti),
+      copertiRistorante: dailyMetricTotal(r, "copertiRistorante"),
+      menu: dailyMetricTotal(r, "menu"),
+      pizze: dailyMetricTotal(r, "pizze"),
+      supplementi: dailyMetricTotal(r, "supplementi"),
+      portate: dailyMetricTotal(r, "portate"),
+      asporto: getDailyAsportoTotal(r),
+      pranzoEuro: n(pranzo.servizio),
+      cenaEuro: n(cena.servizio),
+      banchettiEuro: n(banchettiAgg.servizio),
+      bancone: getDailyBanconeTotal(r),
+      contanti,
+      posLordo,
+      posCommissioni,
+      posNetto,
+      entrateContanti: contantiCash.entrate,
+      usciteContanti: contantiCash.uscite,
+      entratePos: posCash.entrate,
+      uscitePos: posCash.uscite,
+      saldoContanti: saldoFine.contanti?.saldo || 0,
+      saldoPos: saldoFine.pos?.saldo || 0,
+      saldoFine,
+    };
+  });
+}
+function renderReportDayRows(dayRows = []) {
+  const box = safeEl("reportDailyDetail");
+  if (!box) return;
+  if (!dayRows.length) {
+    box.innerHTML = `<div class="alert">Nessuna giornata nel periodo scelto.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="report-day-list">${dayRows.map(row => `
+    <article class="report-day-card">
+      <div class="report-day-head">
+        <div><strong>${formatDate(row.data)}</strong><small>Coperti pranzo+cena ${row.copertiPranzoCena} · banchetti ${row.banchettiCount} / coperti ${row.copertiBanchetti}</small></div>
+        <div class="report-day-money"><span>Contanti ${euro(row.contanti)}</span><span>POS lordo ${euro(row.posLordo)}</span><span>POS netto ${euro(row.posNetto)}</span></div>
+      </div>
+      <div class="report-day-balances"><span>Saldo contanti: <strong>${euro(row.saldoContanti)}</strong></span><span>Saldo POS netto: <strong>${euro(row.saldoPos)}</strong></span></div>
+      <div class="report-service-grid">
+        ${serviceInfoHtml(row.pranzo, "Pranzo")}
+        ${serviceInfoHtml(row.cena, "Cena")}
+        ${row.banchettiList.length ? row.banchettiList.map((b,i) => serviceInfoHtml(b, `Banchetto ${i+1}`)).join("") : `<div class="report-service-card empty"><h5>Banchetti</h5><div><span>Nessun banchetto</span><strong>—</strong></div></div>`}
+      </div>
+    </article>`).join("")}</div>`;
+}
+function buildReportPrintHtml(payload) {
+  if (!payload) return "";
+  const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} → ${formatDate(payload.range.to)}` : "Tutto l’archivio";
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(payload.label)}</title><style>body{font-family:Arial,sans-serif;color:#111;margin:18px;font-size:11px}h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:18px 0 8px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:4px;text-align:right}th:first-child,td:first-child{text-align:left}.muted{color:#555}@media print{@page{size:A4 landscape;margin:8mm}}</style></head><body><h1>${escapeHtml(payload.label || "Report")}</h1><p class="muted">Periodo: ${rangeText}</p></body></html>`;
+}
+function pdfCleanText(value) {
+  return String(value ?? "").replace(/€/g, "EUR").replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7E]/g, " ").replace(/\s+/g, " ").trim();
+}
+function pdfMoney(value) { return pdfCleanText(euro(value)); }
+function pdfEscape(value) { return pdfCleanText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)"); }
+function buildReportPdfDocument(payload, mode = "simple") {
+  const W = 842, H = 595, margin = 22;
+  const pages = [];
+  let ops = [];
+  function addPage(){ ops=[]; pages.push(ops); }
+  function py(y){ return H-y; }
+  function cleanClip(str, max=110){ const s = pdfCleanText(str); return s.length > max ? s.slice(0, max-1) + "…" : s; }
+  function text(x,y,str,size=8,bold=false,align="left"){
+    const clean = pdfEscape(cleanClip(str, Math.max(20, Math.floor((W - x - margin) / (size * 0.45)))));
+    const approxWidth = clean.length * size * 0.46;
+    const tx = align === "right" ? Math.max(margin, x - approxWidth) : x;
+    ops.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${tx.toFixed(2)} ${py(y).toFixed(2)} Td (${clean}) Tj ET`);
+  }
+  function line(x1,y1,x2,y2){ ops.push(`${x1.toFixed(2)} ${py(y1).toFixed(2)} m ${x2.toFixed(2)} ${py(y2).toFixed(2)} l S`); }
+  function ensure(y, needed=12, title=""){
+    if (y + needed <= H - margin) return y;
+    addPage(); y = margin;
+    if (title){ text(margin,y,title,13,true); y += 14; line(margin,y,W-margin,y); y += 10; }
+    return y;
+  }
+  function rowText(cols, y, size=6.6, bold=false){
+    let x = margin;
+    cols.forEach(c => { text(c.align === "right" ? x + c.w - 2 : x + 2, y, c.v, size, bold, c.align || "left"); x += c.w; });
+  }
+  function simplePdf(y){
+    text(margin, y, "Dettaglio semplificato giorno per giorno", 13, true); y += 14;
+    const cols = [
+      ["Data",54,"left"],["Cop.",34,"right"],["Contanti",65,"right"],["POS lordo",70,"right"],["POS netto",70,"right"],["Banch.",42,"right"],["Cop.banch.",56,"right"],["Saldo cont.",75,"right"],["Saldo POS",75,"right"]
+    ].map(([h,w,align]) => ({h,w,align}));
+    rowText(cols.map(c => ({w:c.w, align:c.align, v:c.h})), y, 6.8, true); y += 8; line(margin, y, W-margin, y); y += 8;
+    (payload.dayRows || []).forEach(r => {
+      y = ensure(y, 11, "Dettaglio semplificato giorno per giorno");
+      const vals = [formatDate(r.data), r.copertiPranzoCena, pdfMoney(r.contanti), pdfMoney(r.posLordo), pdfMoney(r.posNetto), r.banchettiCount, r.copertiBanchetti, pdfMoney(r.saldoContanti), pdfMoney(r.saldoPos)];
+      rowText(cols.map((c,i) => ({w:c.w, align:c.align, v:vals[i]})), y, 6.8); y += 10;
+    });
+    return y;
+  }
+  function servicePdfLine(label, info){
+    return `${label}: coperti ${info.coperti} | contanti ${pdfMoney(info.contanti)} | POS lordo ${pdfMoney(info.posLordo)} | POS netto ${pdfMoney(info.posNetto)} | asporto ${pdfMoney(info.asporto)} | servizio ${pdfMoney(info.servizio)} | bancone ${pdfMoney(info.bancone)} | pizze ${info.pizze} | cop. rist. ${info.copertiRistorante} | menu ${info.menu} | suppl. ${info.supplementi} | portate ${info.portate}`;
+  }
+  function detailedPdf(y){
+    text(margin, y, "Dettaglio completo giorno per giorno", 13, true); y += 14;
+    (payload.dayRows || []).forEach(r => {
+      y = ensure(y, 64, "Dettaglio completo giorno per giorno");
+      text(margin, y, `${formatDate(r.data)} - Contanti ${pdfMoney(r.contanti)} - POS lordo ${pdfMoney(r.posLordo)} - POS netto ${pdfMoney(r.posNetto)}`, 9, true); y += 10;
+      text(margin, y, `Saldo fine giorno: contanti ${pdfMoney(r.saldoContanti)} - POS netto ${pdfMoney(r.saldoPos)}`, 8, true); y += 10;
+      text(margin+8, y, servicePdfLine("Pranzo", r.pranzo), 6.4); y += 9;
+      text(margin+8, y, servicePdfLine("Cena", r.cena), 6.4); y += 9;
+      if (r.banchettiList && r.banchettiList.length) {
+        r.banchettiList.forEach((b, i) => { y = ensure(y, 10, "Dettaglio completo giorno per giorno"); text(margin+8, y, servicePdfLine(b.label || `Banchetto ${i+1}`, b), 6.4); y += 9; });
+      } else { text(margin+8, y, "Banchetti: nessuno", 6.4); y += 9; }
+      y += 4; line(margin, y, W-margin, y); y += 8;
+    });
+    return y;
+  }
+  const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} - ${formatDate(payload.range.to)}` : "Tutto archivio";
+  addPage();
+  let y = margin;
+  text(margin,y,`${payload.label || "Report"} - ${mode === "detailed" ? "dettagliato" : "semplificato"}`,18,true); y += 16;
+  text(margin,y,`Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`,8); y += 14; line(margin,y,W-margin,y); y += 12;
+  const saldi = Object.entries(payload.endBreakdown || {}).map(([name,row]) => `${cashLabel(name)} ${pdfMoney(row.saldo)}`).join(" | ");
+  text(margin,y,`Giornate ${payload.records?.length || 0} | Incasso netto ${pdfMoney(payload.incassoNetto)} | SumUp ${pdfMoney(payload.commissioni)}`,9,true); y += 11;
+  text(margin,y,`Saldi a fine periodo: ${saldi}`,8,true); y += 15;
+  y = mode === "detailed" ? detailedPdf(y) : simplePdf(y);
+
+  const objects = [];
+  function addObj(content){ objects.push(content); return objects.length; }
+  addObj("<< /Type /Catalog /Pages 2 0 R >>");
+  addObj("PAGES_PLACEHOLDER");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  const pageIds=[];
+  pages.forEach(pageOps => {
+    const content = pageOps.join("\n");
+    const contentId = addObj(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    const pageId = addObj(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`);
+    pageIds.push(pageId);
+  });
+  objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+  let pdf = "%PDF-1.4\n";
+  const offsets=[0];
+  objects.forEach((obj,i) => { offsets.push(pdf.length); pdf += `${i+1} 0 obj\n${obj}\nendobj\n`; });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<=objects.length;i++) pdf += `${String(offsets[i]).padStart(10,"0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return pdf;
+}
+function downloadReportPdf(payload, mode = "simple") {
+  const pdf = buildReportPdfDocument(payload, mode);
+  const blob = new Blob([pdf], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const base = pdfCleanText(payload.label || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
+  a.href = url;
+  a.download = `${base}-${mode === "detailed" ? "dettagliato" : "semplificato"}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function exportCurrentReportPdf(mode = "simple") {
+  if (!lastReportPayload) { showGlobalMessage("Genera prima un report.", "error"); return; }
+  try {
+    downloadReportPdf(lastReportPayload, mode);
+    showGlobalMessage(mode === "detailed" ? "PDF dettagliato scaricato." : "PDF semplificato scaricato.", "ok");
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
+  }
+}
+
 function runMonthlyReport() {
   const month = String($("reportMonth").value).padStart(2,"0");
   const year = String($("reportYear").value);
@@ -3792,7 +4120,8 @@ function bindEvents() {
   safeEl("saveBanBtn")?.addEventListener("click", saveBooking);
   safeEl("runReportBtn")?.addEventListener("click", runMonthlyReport);
   safeEl("runPeriodReportBtn")?.addEventListener("click", runPeriodReport);
-  safeEl("exportReportPdfBtn")?.addEventListener("click", exportCurrentReportPdf);
+  safeEl("exportReportPdfBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
+  safeEl("exportReportPdfDetailedBtn")?.addEventListener("click", () => exportCurrentReportPdf("detailed"));
   safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));

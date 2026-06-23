@@ -324,16 +324,16 @@
       <section id="casse" class="section">
         <div class="split">
           <div class="card">
-            <h3>Saldi iniziali con data</h3>
-            <p class="muted small">Inserisci il saldo reale prima della giornata scelta. Esempio: saldo alla chiusura del 31/05 → data 01/06, così il gestionale conta dal 01/06 in poi.</p>
+            <h3>Saldi certi con data</h3>
+            <p class="muted small">Inserisci il saldo reale verificato alla chiusura della data scelta. Da lì il gestionale calcola in avanti e anche a ritroso nei report.</p>
             <div class="grid2">
-              <div class="field"><label>Contanti iniziale</label><input id="cashInitContanti" type="number" step="0.01" inputmode="decimal" /></div>
-              <div class="field"><label>Data partenza contanti</label><input id="cashInitContantiDate" type="date" /></div>
-              <div class="field"><label>POS / SumUp iniziale</label><input id="cashInitPos" type="number" step="0.01" inputmode="decimal" /></div>
-              <div class="field"><label>Data partenza POS</label><input id="cashInitPosDate" type="date" /></div>
+              <div class="field"><label>Contanti saldo certo</label><input id="cashInitContanti" type="number" step="0.01" inputmode="decimal" /></div>
+              <div class="field"><label>Data saldo certo contanti</label><input id="cashInitContantiDate" type="date" /></div>
+              <div class="field"><label>POS / SumUp saldo certo</label><input id="cashInitPos" type="number" step="0.01" inputmode="decimal" /></div>
+              <div class="field"><label>Data saldo certo POS</label><input id="cashInitPosDate" type="date" /></div>
             </div>
-            <div class="alert small">Se lasci la data vuota, quella cassa continua a contare tutti i movimenti inseriti da sempre.</div>
-            <div class="toolbar"><div></div><button id="saveCashInitBtn">Salva saldi iniziali e date</button></div>
+            <div class="alert small">Esempio: se sai quanto avevi oggi, metti il saldo di oggi e la data di oggi. Il report ti ricostruisce anche i saldi dei giorni precedenti.</div>
+            <div class="toolbar"><div></div><button id="saveCashInitBtn">Salva saldi certi e date</button></div>
           </div>
 
           <div class="card">
@@ -590,9 +590,12 @@
           <div class="toolbar">
             <div>
               <h3>Report giorno / periodo</h3>
-              <p class="muted small" style="margin:4px 0 0 0;">Il report mostra anche saldo contanti e POS netto alla data finale del periodo scelto.</p>
+              <p class="muted small" style="margin:4px 0 0 0;">Il report mostra saldi contanti e POS netto giorno per giorno, calcolati anche a ritroso dal saldo certo impostato.</p>
             </div>
-            <button id="exportReportPdfBtn" class="secondary" type="button">Scarica PDF</button>
+            <div class="report-export-actions">
+              <button id="exportReportPdfBtn" class="secondary" type="button">PDF semplificato</button>
+              <button id="exportReportPdfDetailedBtn" class="secondary" type="button">PDF dettagliato</button>
+            </div>
           </div>
           <div class="grid3">
             <div class="field"><label>Da data</label><input id="reportFromDate" type="date" /></div>
@@ -609,7 +612,7 @@
           <div id="reportSummary" class="grid2"></div>
           <div class="card inner" style="margin-top:14px;">
             <h4 style="margin-top:0;">Dettaglio giorno per giorno</h4>
-            <p class="muted small">Qui trovi giorno per giorno coperti, menù, pizze, portate, contanti, POS lordo/netto e saldo delle casse a fine giornata.</p>
+            <p class="muted small">Qui trovi ogni giornata con riepilogo, pranzo, cena, eventuali banchetti e saldi casse aggiornati a quel giorno.</p>
             <div id="reportDailyDetail"></div>
           </div>
         </div>

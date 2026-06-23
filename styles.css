@@ -471,3 +471,39 @@ input[type="checkbox"]{
     padding:9px 8px;
   }
 }
+
+/* V21: report leggibile senza zoom da PC + dettaglio a schede */
+.report-export-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;}
+.report-day-list{display:flex;flex-direction:column;gap:14px;}
+.report-day-card{border:1px solid rgba(255,255,255,.10);border-radius:16px;background:#020617;padding:14px;}
+.report-day-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid rgba(255,255,255,.08);padding-bottom:10px;margin-bottom:10px;}
+.report-day-head strong{font-size:16px;display:block;}
+.report-day-head small{display:block;color:#94a3b8;margin-top:3px;}
+.report-day-money{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+.report-day-money span,.report-day-balances span{background:#111827;border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:6px 9px;white-space:nowrap;font-size:13px;}
+.report-day-balances{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.report-service-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}
+.report-service-card{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#0f172a;padding:11px;}
+.report-service-card.empty{opacity:.72;}
+.report-service-card h5{margin:0 0 8px;font-size:15px;}
+.report-service-card div{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:13px;}
+.report-service-card div:last-child{border-bottom:0;}
+.report-service-card span{color:#94a3b8;}
+.report-service-card strong{text-align:right;}
+@media (min-width:981px){
+  #report .card{padding:14px;}
+  #report h3{margin-top:0;margin-bottom:10px;}
+  #report .grid4{gap:10px;}
+  #reportSummary.grid2{grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:10px;}
+  #reportSummary .card{padding:10px;border-radius:14px;}
+  #reportSummary .card div:not(.muted){font-size:16px;line-height:1.15;}
+  #report .metric-value.small{font-size:18px;}
+  #report .inner{margin-top:10px;}
+}
+@media (max-width:780px){
+  .report-export-actions{display:grid;grid-template-columns:1fr;gap:8px;width:100%;}
+  .report-day-head{display:grid;grid-template-columns:1fr;}
+  .report-day-money{justify-content:flex-start;}
+  .report-service-grid{grid-template-columns:1fr;}
+  .report-day-card{padding:12px;}
+}
