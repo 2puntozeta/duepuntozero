@@ -324,12 +324,16 @@
       <section id="casse" class="section">
         <div class="split">
           <div class="card">
-            <h3>Saldi iniziali</h3>
+            <h3>Saldi iniziali con data</h3>
+            <p class="muted small">Inserisci il saldo reale prima della giornata scelta. Esempio: saldo alla chiusura del 31/05 → data 01/06, così il gestionale conta dal 01/06 in poi.</p>
             <div class="grid2">
-              <div class="field"><label>Contanti iniziale</label><input id="cashInitContanti" type="number" step="0.01" /></div>
-              <div class="field"><label>POS iniziale</label><input id="cashInitPos" type="number" step="0.01" /></div>
+              <div class="field"><label>Contanti iniziale</label><input id="cashInitContanti" type="number" step="0.01" inputmode="decimal" /></div>
+              <div class="field"><label>Data partenza contanti</label><input id="cashInitContantiDate" type="date" /></div>
+              <div class="field"><label>POS / SumUp iniziale</label><input id="cashInitPos" type="number" step="0.01" inputmode="decimal" /></div>
+              <div class="field"><label>Data partenza POS</label><input id="cashInitPosDate" type="date" /></div>
             </div>
-            <div class="toolbar"><div></div><button id="saveCashInitBtn">Salva saldi iniziali</button></div>
+            <div class="alert small">Se lasci la data vuota, quella cassa continua a contare tutti i movimenti inseriti da sempre.</div>
+            <div class="toolbar"><div></div><button id="saveCashInitBtn">Salva saldi iniziali e date</button></div>
           </div>
 
           <div class="card">

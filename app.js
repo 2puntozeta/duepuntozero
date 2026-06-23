@@ -10,6 +10,7 @@ const state = {
   activeCompany: null,
   dailyRecords: [],
   cashInitial: { contanti: 0, pos: 0 },
+  cashInitialDate: { contanti: "", pos: "" },
   customCashes: [],
   cashMovements: [],
   suppliers: [],
@@ -54,6 +55,12 @@ function dateFromDateTimeOrDate(dateTime, dateStr) {
   const dt = cleanDateTimeLocal(dateTime);
   if (dt && /^\d{4}-\d{2}-\d{2}/.test(dt)) return dt.slice(0, 10);
   return dateStr || todayStr();
+}
+function formatDate(v) {
+  if (!v) return "—";
+  const raw = String(v).slice(0, 10);
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : raw;
 }
 function formatDateTime(v) {
   if (!v) return "—";
@@ -181,6 +188,19 @@ function cashLabel(name) {
   if (name === "contanti") return "Contanti";
   if (name === "pos") return "POS";
   return name || "—";
+}
+function cashStartDate(name) {
+  return (state.cashInitialDate && state.cashInitialDate[name]) ? String(state.cashInitialDate[name]).slice(0, 10) : "";
+}
+function isOnOrAfterCashStart(dateStr, cashName) {
+  const start = cashStartDate(cashName);
+  if (!start) return true;
+  if (!dateStr) return true;
+  return String(dateStr).slice(0, 10) >= start;
+}
+function cashStartLabel(name) {
+  const start = cashStartDate(name);
+  return start ? `dal ${formatDate(start)}` : "da inizio dati";
 }
 function isPosCash(name) {
   return String(name || "").toLowerCase() === "pos";
@@ -887,13 +907,16 @@ function computeCashBreakdown() {
   Object.entries(state.cashInitial || {}).forEach(([name, amount]) => {
     if (!out[name]) out[name] = emptyCashBreakdownRow();
     out[name].iniziale += n(amount);
+    out[name].startDate = cashStartDate(name);
   });
   (state.customCashes || []).forEach(c => {
     if (!out[c.name]) out[c.name] = emptyCashBreakdownRow();
     out[c.name].iniziale += n(c.amount);
+    out[c.name].startDate = out[c.name].startDate || "";
   });
   state.dailyRecords.forEach(rec => {
     cashNames().forEach(name => {
+      if (!isOnOrAfterCashStart(rec?.data, name)) return;
       if (!out[name]) out[name] = emptyCashBreakdownRow();
       const gross = getDailyCashAmount(rec, name);
       const fee = getDailyCashFeeAmount(rec, name);
@@ -905,6 +928,7 @@ function computeCashBreakdown() {
   });
   state.cashMovements.forEach(m => {
     const name = m.cassa || "contanti";
+    if (!isOnOrAfterCashStart(m?.data, name)) return;
     if (!out[name]) out[name] = emptyCashBreakdownRow();
     if (m.tipo === "entrata") out[name].entrate += n(m.importo);
     else out[name].uscite += n(m.importo);
@@ -1211,11 +1235,13 @@ function compareCloudRawWithUi(raw) {
   });
 
   const rawCashInitial = { contanti:0, pos:0 };
-  (raw.cash_state || []).forEach(r => { rawCashInitial[r.kind] = n(r.amount); });
+  const rawCashInitialDate = { contanti:"", pos:"" };
+  (raw.cash_state || []).forEach(r => { rawCashInitial[r.kind] = n(r.amount); if (r.reference_date) rawCashInitialDate[r.kind] = String(r.reference_date).slice(0, 10); });
   const uiCashInitial = state.cashInitial || {};
+  const uiCashInitialDate = state.cashInitialDate || {};
   Object.keys(rawCashInitial).forEach(kind => {
-    if (!roughlySameMoney(rawCashInitial[kind], uiCashInitial[kind])) {
-      issues.push({ level:"bad", title:`Saldo iniziale ${cashLabel(kind)}`, text:`Supabase ha ${euro(rawCashInitial[kind])}, il sito sta usando ${euro(uiCashInitial[kind])}. Ricarica i dati.` });
+    if (!roughlySameMoney(rawCashInitial[kind], uiCashInitial[kind]) || (rawCashInitialDate[kind] || "") !== (uiCashInitialDate[kind] || "")) {
+      issues.push({ level:"bad", title:`Saldo iniziale ${cashLabel(kind)}`, text:`Supabase ha ${euro(rawCashInitial[kind])} ${rawCashInitialDate[kind] ? "dal " + formatDate(rawCashInitialDate[kind]) : ""}, il sito sta usando ${euro(uiCashInitial[kind])} ${uiCashInitialDate[kind] ? "dal " + formatDate(uiCashInitialDate[kind]) : ""}. Ricarica i dati.` });
     }
   });
 
@@ -1408,6 +1434,8 @@ function auditSnapshot() {
   return {
     generated_at: new Date().toISOString(),
     company: state.activeCompany,
+    cash_initial: state.cashInitial,
+    cash_initial_date: state.cashInitialDate,
     cash_breakdown: computeCashBreakdown(),
     daily_cash_audit: dailyCashReconciliationRows(),
     issues,
@@ -2028,7 +2056,11 @@ async function loadCompanyData() {
   state.employeeMovements = employee_movements;
   state.bookings = bookings;
   state.cashInitial = { contanti:0, pos:0 };
-  cash_state.forEach(r => { state.cashInitial[r.kind] = n(r.amount); });
+  state.cashInitialDate = { contanti:"", pos:"" };
+  cash_state.forEach(r => {
+    state.cashInitial[r.kind] = n(r.amount);
+    if (r.reference_date) state.cashInitialDate[r.kind] = String(r.reference_date).slice(0, 10);
+  });
 }
 async function refreshData(message=null) {
   try {
@@ -2043,19 +2075,25 @@ async function refreshData(message=null) {
   }
 }
 
-async function upsertCashState(kind, amount) {
-  const { error } = await supabase.from("cash_state").upsert({ company_id: state.activeCompany.id, kind, amount }, { onConflict: "company_id,kind" });
+async function upsertCashState(kind, amount, referenceDate = "") {
+  const payload = { company_id: state.activeCompany.id, kind, amount, reference_date: referenceDate || null };
+  const { error } = await supabase.from("cash_state").upsert(payload, { onConflict: "company_id,kind" });
   if (error) throw error;
 }
 async function saveCashInitial() {
   try {
     await Promise.all([
-      upsertCashState("contanti", n(safeEl("cashInitContanti")?.value)),
-      upsertCashState("pos", n(safeEl("cashInitPos")?.value)),
+      upsertCashState("contanti", n(safeEl("cashInitContanti")?.value), safeEl("cashInitContantiDate")?.value || ""),
+      upsertCashState("pos", n(safeEl("cashInitPos")?.value), safeEl("cashInitPosDate")?.value || ""),
     ]);
-    await refreshData("Saldi iniziali salvati.");
+    await refreshData("Saldi iniziali con data salvati.");
   } catch (err) {
-    showGlobalMessage(err.message, "error");
+    const msg = String(err?.message || err || "");
+    if (msg.includes("reference_date")) {
+      showGlobalMessage("Manca la colonna reference_date su Supabase: lancia una sola volta il file setup_cash_state_reference_date.sql e poi riprova.", "error");
+    } else {
+      showGlobalMessage(msg, "error");
+    }
   }
 }
 async function saveNewCash() {
@@ -2899,7 +2937,7 @@ async function deleteBookingById(id) {
 async function exportBackup() {
   const snapshot = {
     company: state.activeCompany, exported_at: new Date().toISOString(),
-    dailyRecords: state.dailyRecords, cashInitial: state.cashInitial, customCashes: state.customCashes,
+    dailyRecords: state.dailyRecords, cashInitial: state.cashInitial, cashInitialDate: state.cashInitialDate, customCashes: state.customCashes,
     cashMovements: state.cashMovements, suppliers: state.suppliers, supplierMovements: state.supplierMovements,
     employees: state.employees, employeeMovements: state.employeeMovements, bookings: state.bookings
   };
@@ -2918,7 +2956,7 @@ async function importBackup(file) {
       await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec }, { onConflict: "company_id,data" });
     }
     for (const [kind, amount] of Object.entries(data.cashInitial || {})) {
-      await supabase.from("cash_state").upsert({ company_id: state.activeCompany.id, kind, amount }, { onConflict: "company_id,kind" });
+      await supabase.from("cash_state").upsert({ company_id: state.activeCompany.id, kind, amount, reference_date: data.cashInitialDate?.[kind] || null }, { onConflict: "company_id,kind" });
     }
     for (const c of data.customCashes || []) {
       await supabase.from("custom_cash_state").upsert({ company_id: state.activeCompany.id, name: c.name, amount: c.amount }, { onConflict: "company_id,name" });
@@ -2983,9 +3021,10 @@ function renderDashboard() {
   if (safeEl("cashSummary")) {
     const breakdown = computeCashBreakdown();
     $("cashSummary").innerHTML = Object.entries(breakdown).map(([k,row]) => {
+      const startInfo = row.startDate ? ` (${cashStartLabel(k)})` : "";
       const detail = isPosCash(k)
-        ? `iniziale ${euro(row.iniziale)} · incassi netti ${euro(row.incassi)} · POS lordo ${euro(row.lordo)} · commissioni SumUp ${euro(row.commissioni)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`
-        : `iniziale ${euro(row.iniziale)} · incassi ${euro(row.incassi)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`;
+        ? `iniziale ${euro(row.iniziale)}${startInfo} · incassi netti ${euro(row.incassi)} · POS lordo ${euro(row.lordo)} · commissioni SumUp ${euro(row.commissioni)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`
+        : `iniziale ${euro(row.iniziale)}${startInfo} · incassi ${euro(row.incassi)} · entrate ${euro(row.entrate)} · uscite ${euro(row.uscite)}`;
       return `
       <div class="item cash-balance-row">
         <div>
@@ -3027,6 +3066,8 @@ function renderDailyTable() {
 function renderCash() {
   if (safeEl("cashInitContanti")) $("cashInitContanti").value = inputNumberValue(state.cashInitial.contanti);
   if (safeEl("cashInitPos")) $("cashInitPos").value = inputNumberValue(state.cashInitial.pos);
+  if (safeEl("cashInitContantiDate")) $("cashInitContantiDate").value = state.cashInitialDate?.contanti || "";
+  if (safeEl("cashInitPosDate")) $("cashInitPosDate").value = state.cashInitialDate?.pos || "";
   ["movCassa", "fornMovCassa", "dipMovCassa", "supplierDetailCassa", "employeeDetailCassa"].forEach(id => fillCashSelect(id, safeEl(id)?.value || "contanti"));
   renderDailyCashInputs();
   if (safeEl("customCashTable")) {
