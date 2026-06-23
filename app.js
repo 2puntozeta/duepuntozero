@@ -3676,10 +3676,11 @@ function pdfEscape(value) {
   return pdfCleanText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 function buildReportPdfDocument(payload, mode = "simple") {
-  const W = 842; // A4 landscape
+  const W = 842; // A4 orizzontale
   const H = 595;
-  const margin = 30;
+  const margin = 28;
   const bodyW = W - margin * 2;
+  const footerY = H - 12;
   const pages = [];
   let ops = [];
   function addPage() { ops = []; pages.push(ops); }
@@ -3692,179 +3693,204 @@ function buildReportPdfDocument(payload, mode = "simple") {
     return [r,g,b].map(v => Number.isFinite(v) ? v.toFixed(3) : "0").join(" ");
   }
   function fillRect(x, y, w, h, hex) {
-    ops.push(`${color(hex)} rg ${x.toFixed(2)} ${py(y + h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re f 0 0 0 rg`);
+    const xx = Math.max(margin, Math.min(x, W - margin));
+    const ww = Math.max(0, Math.min(w, W - margin - xx));
+    if (!ww || h <= 0) return;
+    ops.push(`${color(hex)} rg ${xx.toFixed(2)} ${py(y + h).toFixed(2)} ${ww.toFixed(2)} ${h.toFixed(2)} re f 0 0 0 rg`);
+  }
+  function strokeRect(x, y, w, h, hex = "#d4d4d8") {
+    const xx = Math.max(margin, Math.min(x, W - margin));
+    const ww = Math.max(0, Math.min(w, W - margin - xx));
+    if (!ww || h <= 0) return;
+    ops.push(`${color(hex)} RG ${xx.toFixed(2)} ${py(y + h).toFixed(2)} ${ww.toFixed(2)} ${h.toFixed(2)} re S 0 0 0 RG`);
   }
   function line(x1, y1, x2, y2, hex = "#d4d4d8") {
-    ops.push(`${color(hex)} RG ${x1.toFixed(2)} ${py(y1).toFixed(2)} m ${x2.toFixed(2)} ${py(y2).toFixed(2)} l S 0 0 0 RG`);
+    const a = Math.max(margin, Math.min(x1, W - margin));
+    const b = Math.max(margin, Math.min(x2, W - margin));
+    ops.push(`${color(hex)} RG ${a.toFixed(2)} ${py(y1).toFixed(2)} m ${b.toFixed(2)} ${py(y2).toFixed(2)} l S 0 0 0 RG`);
   }
-  function maxCharsForWidth(w, size, pad = 8) {
-    return Math.max(3, Math.floor(Math.max(8, w - pad) / (size * 0.56)));
-  }
-  function shortenPdfText(clean, maxChars) {
-    if (maxChars && clean.length > maxChars) return clean.slice(0, Math.max(0, maxChars - 3)) + "...";
+  function cleanForWidth(str, size, maxWidth) {
+    let clean = pdfCleanText(str);
+    const chars = Math.max(1, Math.floor((maxWidth || bodyW) / (size * 0.48)));
+    if (clean.length > chars) clean = clean.slice(0, Math.max(0, chars - 3)) + "...";
     return clean;
   }
-  function text(x, y, str, size = 7, bold = false, align = "left", maxChars = 0, maxWidth = 0) {
-    let clean = pdfEscape(str);
-    if (maxWidth) maxChars = Math.min(maxChars || 9999, maxCharsForWidth(maxWidth, size, 4));
-    clean = shortenPdfText(clean, maxChars);
-    // Stima volutamente larga: evita che testi lunghi escano dai margini del PDF.
-    const approxWidth = clean.length * size * 0.56;
+  function text(x, y, str, size = 7, bold = false, align = "left", maxWidth = 0) {
+    const usable = maxWidth || (align === "right" ? Math.max(10, x - margin) : Math.max(10, W - margin - x));
+    const cleanRaw = cleanForWidth(str, size, usable);
+    const clean = pdfEscape(cleanRaw);
+    const approxWidth = cleanRaw.length * size * 0.48;
     let tx = align === "right" ? x - approxWidth : x;
-    if (tx < margin) tx = margin;
-    if (tx + approxWidth > W - margin) tx = Math.max(margin, W - margin - approxWidth);
+    tx = Math.max(margin + 1, Math.min(tx, W - margin - 1));
     ops.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${tx.toFixed(2)} ${py(y).toFixed(2)} Td (${clean}) Tj ET`);
   }
-  function ensureSpace(y, needed, title) {
-    if (y + needed <= H - margin) return y;
+  function addFooter() {
+    const pageNo = pages.length;
+    text(W - margin, footerY, `Pagina ${pageNo}`, 6, false, "right", 80);
+  }
+  function newPage(title = "") {
+    if (pages.length) addFooter();
     addPage();
     let ny = margin;
-    if (title) { text(margin, ny, title, 13, true); ny += 15; line(margin, ny, W - margin, ny); ny += 9; }
+    if (title) {
+      text(margin, ny, title, 12, true, "left", bodyW);
+      ny += 14;
+      line(margin, ny, W - margin, ny);
+      ny += 8;
+    }
     return ny;
   }
-  function dayBg(dateStr, idx) { return isWeekend(dateStr) ? "#fee2e2" : (idx % 2 ? "#f4f4f5" : "#ffffff"); }
-  function headerFill(x, y, w, h) { fillRect(x, y, w, h, "#e5e7eb"); }
-  function colsWidth(cols) { return cols.reduce((a,c)=>a+c[1],0); }
-  function fitCols(cols, maxW = bodyW) {
-    const total = colsWidth(cols);
-    if (total <= maxW) return cols;
-    const factor = maxW / total;
-    return cols.map(([h,w]) => [h, Math.floor(w * factor)]);
+  function ensureSpace(y, needed, title = "") {
+    if (y + needed <= H - margin - 10) return y;
+    return newPage(title);
   }
-  function labelForMode() { return mode === "detailed" ? "PDF dettagliato" : "PDF semplificato"; }
+  function dayBg(dateStr, idx) { return isWeekend(dateStr) ? "#fee2e2" : (idx % 2 ? "#f4f4f5" : "#ffffff"); }
+  function tableHeader(y, cols) {
+    fillRect(margin, y, bodyW, 15, "#e5e7eb");
+    let x = margin;
+    cols.forEach(([h,w,align]) => {
+      text(align === "right" ? x + w - 3 : x + 3, y + 10, h, 5.6, true, align || "left", w - 6);
+      x += w;
+    });
+    strokeRect(margin, y, bodyW, 15, "#cbd5e1");
+    return y + 17;
+  }
+  function tableRow(y, cols, vals, bg, bold = false) {
+    fillRect(margin, y, bodyW, 13, bg);
+    let x = margin;
+    cols.forEach(([_,w,align], i) => {
+      text((align === "right" ? x + w - 3 : x + 3), y + 9, vals[i], 5.6, bold, align || "left", w - 6);
+      x += w;
+    });
+    strokeRect(margin, y, bodyW, 13, "#e5e7eb");
+    return y + 13;
+  }
+  function drawMiniCard(x, y, w, h, label, value, bg = "#f8fafc") {
+    fillRect(x, y, w, h, bg);
+    strokeRect(x, y, w, h, "#cbd5e1");
+    text(x + 4, y + 8, label, 5.8, false, "left", w - 8);
+    text(x + 4, y + 18, value, 7.2, true, "left", w - 8);
+  }
+  function drawSummaryCards(y) {
+    const items = [
+      ["Giornate", payload.records?.length || 0],
+      ["Incasso lordo", pdfMoney(payload.incasso)],
+      ["Incasso netto", pdfMoney(payload.incassoNetto)],
+      ["Commissioni", pdfMoney(payload.commissioni)],
+      ["Coperti", payload.servizioTotali?.totale?.coperti || 0],
+      ["Menu", payload.servizioTotali?.totale?.menu || 0],
+      ["Pizze", payload.servizioTotali?.totale?.pizze || 0],
+      ["Portate", payload.servizioTotali?.totale?.portate || 0],
+      ["Uscite fornitori", pdfMoney(payload.supplierOut)],
+      ["Uscite dipendenti", pdfMoney(payload.employeeOut)],
+      ["Asporto", pdfMoney(payload.asporto)],
+      ["Bancone", pdfMoney(payload.bancone)],
+    ];
+    const gap = 6;
+    const cardW = (bodyW - gap * 3) / 4;
+    const cardH = 25;
+    items.forEach((item, idx) => {
+      const col = idx % 4;
+      const row = Math.floor(idx / 4);
+      drawMiniCard(margin + col * (cardW + gap), y + row * (cardH + 5), cardW, cardH, item[0], item[1]);
+    });
+    return y + Math.ceil(items.length / 4) * (cardH + 5) + 6;
+  }
+  function drawCashTable(y) {
+    y = ensureSpace(y, 55, "Saldi casse a fine periodo");
+    text(margin, y, "Saldi casse a fine periodo", 11, true, "left", bodyW); y += 10;
+    const cols = [["Cassa", 120, "left"], ["Iniziale", 105, "right"], ["Incassi netti", 115, "right"], ["Lordo", 95, "right"], ["Commissioni", 95, "right"], ["Uscite", 105, "right"], ["Saldo finale", 115, "right"]];
+    y = tableHeader(y, cols);
+    Object.entries(payload.endBreakdown || {}).forEach(([name,row], idx) => {
+      y = ensureSpace(y, 16, "Saldi casse a fine periodo");
+      const vals = [cashLabel(name), pdfMoney(row.iniziale), pdfMoney(row.incassi), pdfMoney(row.lordo), pdfMoney(row.commissioni), pdfMoney(row.uscite), pdfMoney(row.saldo)];
+      y = tableRow(y, cols, vals, idx % 2 ? "#f8fafc" : "#ffffff", false);
+    });
+    return y + 8;
+  }
+  function serviceMoneyLabel(label) {
+    if (label === "Pranzo") return "Pranzo EUR";
+    if (label === "Cena") return "Cena EUR";
+    return "Banchetto EUR";
+  }
+  function drawServiceCard(y, title, svc, idx) {
+    const posLordo = n(svc?.pos);
+    const fee = sumupFee(posLordo);
+    const posNetto = Math.max(0, posLordo - fee);
+    const bg = idx % 2 ? "#f8fafc" : "#ffffff";
+    const cellGap = 4;
+    const cellW = (bodyW - cellGap * 3) / 4;
+    const cellH = 22;
+    const rows = [
+      [["Coperti", n(svc?.coperti)], ["Contanti", pdfMoney(svc?.contanti)], ["POS lordo", pdfMoney(posLordo)], ["POS netto", pdfMoney(posNetto)]],
+      [["Asporto", pdfMoney(svc?.asporto)], [serviceMoneyLabel(title), pdfMoney(svc?.servizio)], ["Bancone", pdfMoney(svc?.bancone)], ["Pizze", n(svc?.pizze)]],
+      [["Coperti rist.", n(svc?.copertiRistorante)], ["Menu", n(svc?.menu)], ["Supplementi", n(svc?.supplementi)], ["Portate", n(svc?.portate)]],
+    ];
+    y = ensureSpace(y, 85, "Report dettagliato giorno per giorno");
+    fillRect(margin, y, bodyW, 13, "#e5e7eb");
+    text(margin + 4, y + 9, title, 7.5, true, "left", bodyW - 8);
+    y += 15;
+    rows.forEach((row, ridx) => {
+      row.forEach((pair, cidx) => drawMiniCard(margin + cidx * (cellW + cellGap), y, cellW, cellH, pair[0], pair[1], ridx % 2 ? "#f4f4f5" : bg));
+      y += cellH + 4;
+    });
+    return y + 2;
+  }
+  function isRealBanchetto(b) {
+    return SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || !!String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, "");
+  }
+
+  const labelForMode = () => mode === "detailed" ? "PDF dettagliato" : "PDF semplificato";
   const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} - ${formatDate(payload.range.to)}` : "Tutto l'archivio";
-
-  addPage();
-  let y = margin;
-  text(margin, y, `${payload.label || "Report"} - ${labelForMode()}`, 15, true, "left", 0, bodyW); y += 15;
-  text(margin, y, `Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`, 7.2, false, "left", 0, bodyW); y += 13;
-  line(margin, y, W - margin, y); y += 10;
-
-  const summary = [
-    ["Giornate", payload.records?.length || 0],
-    ["Incasso lordo", pdfMoney(payload.incasso)],
-    ["Incasso netto", pdfMoney(payload.incassoNetto)],
-    ["Commissioni SumUp", pdfMoney(payload.commissioni)],
-    ["Coperti totali", payload.servizioTotali?.totale?.coperti || 0],
-    ["Menu", payload.servizioTotali?.totale?.menu || 0],
-    ["Pizze", payload.servizioTotali?.totale?.pizze || 0],
-    ["Portate", payload.servizioTotali?.totale?.portate || 0],
-    ["Uscite fornitori", pdfMoney(payload.supplierOut)],
-    ["Uscite dipendenti", pdfMoney(payload.employeeOut)],
-    ["Asporto", pdfMoney(payload.asporto)],
-    ["Bancone", pdfMoney(payload.bancone)],
-  ];
-  const cardW = (W - margin * 2 - 18) / 4;
-  summary.forEach((item, idx) => {
-    const col = idx % 4;
-    const row = Math.floor(idx / 4);
-    const x = margin + col * (cardW + 6);
-    const yy = y + row * 34;
-    fillRect(x, yy, cardW, 28, "#f8fafc");
-    line(x, yy, x + cardW, yy, "#cbd5e1"); line(x, yy + 28, x + cardW, yy + 28, "#cbd5e1");
-    text(x + 5, yy + 10, item[0], 6.2, false, "left", 0, cardW - 10);
-    text(x + 5, yy + 22, item[1], 8.2, true, "left", 0, cardW - 10);
-  });
-  y += Math.ceil(summary.length / 4) * 34 + 8;
-
-  y = ensureSpace(y, 70, "Saldi casse a fine periodo");
-  text(margin, y, "Saldi casse a fine periodo", 12, true); y += 12;
-  const cashCols = fitCols([["Cassa", 90], ["Iniziale", 70], ["Incassi netti", 85], ["Lordo", 70], ["Commissioni", 70], ["Uscite", 75], ["Saldo finale", 85]]);
-  headerFill(margin, y - 8, cashCols.reduce((a,c)=>a+c[1],0), 13);
-  let x = margin;
-  cashCols.forEach(([h,w], i) => { text(i === 0 ? x + 2 : x + w - 3, y, h, 6.1, true, i === 0 ? "left" : "right", 0, w - 5); x += w; });
-  y += 8; line(margin, y, W - margin, y); y += 7;
-  Object.entries(payload.endBreakdown || {}).forEach(([name,row], idx) => {
-    y = ensureSpace(y, 11, "Saldi casse a fine periodo");
-    fillRect(margin, y - 7, cashCols.reduce((a,c)=>a+c[1],0), 11, idx % 2 ? "#f4f4f5" : "#ffffff");
-    let cx = margin;
-    const vals = [cashLabel(name), pdfMoney(row.iniziale), pdfMoney(row.incassi), pdfMoney(row.lordo), pdfMoney(row.commissioni), pdfMoney(row.uscite), pdfMoney(row.saldo)];
-    cashCols.forEach(([_,w], i) => { text(i === 0 ? cx + 2 : cx + w - 3, y, vals[i], 6.1, i === 6, i === 0 ? "left" : "right", 0, w - 5); cx += w; });
-    y += 10;
-  });
-  y += 6;
+  let y = newPage();
+  text(margin, y, `${payload.label || "Report"} - ${labelForMode()}`, 16, true, "left", bodyW); y += 15;
+  text(margin, y, `Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`, 7.2, false, "left", bodyW); y += 10;
+  line(margin, y, W - margin, y); y += 9;
+  y = drawSummaryCards(y);
+  y = drawCashTable(y);
 
   if (mode === "detailed") {
-    y = ensureSpace(y, 32, "Report dettagliato giorno per giorno");
-    text(margin, y, "Report dettagliato giorno per giorno", 12, true); y += 14;
-    const cols1 = fitCols([["Voce", 82], ["Coperti", 46], ["Contanti", 66], ["POS lordo", 66], ["SumUp", 50], ["POS netto", 66], ["Asporto", 62], ["Bancone", 58]]);
-    const cols2 = fitCols([["Voce", 82], ["Servizio EUR", 82], ["Pizze", 46], ["Cop.rist", 52], ["Menu", 44], ["Suppl.", 50], ["Portate", 52]]);
-    function drawCells(cols, vals, bg, fs = 6.2, boldFirst = false) {
-      const totalW = Math.min(colsWidth(cols), bodyW);
-      fillRect(margin, y - 7, totalW, 11, bg);
-      let cx = margin;
-      cols.forEach(([_, w], i) => {
-        const align = i === 0 ? "left" : "right";
-        const tx = i === 0 ? cx + 3 : cx + w - 3;
-        text(tx, y, vals[i] ?? "", fs, i === 0 && boldFirst, align, 0, w - 6);
-        cx += w;
-      });
-      y += 10;
-    }
-    function drawHeader(cols) {
-      drawCells(cols, cols.map(c => c[0]), "#e5e7eb", 5.8, true);
-    }
-    function isRealBanchetto(b) {
-      return SERVICE_NUMBER_FIELDS.some(f => n(b?.[f]) !== 0) || !!String(b?.nome || "").trim().replace(/^Banchetto\s*\d+$/i, "");
-    }
-    function renderServiceBlock(label, svc, idx) {
-      const posLordo = n(svc?.pos);
-      const fee = sumupFee(posLordo);
-      const posNetto = Math.max(0, posLordo - fee);
-      y = ensureSpace(y, 48, "Report dettagliato giorno per giorno");
-      const baseBg = idx % 2 ? "#f8fafc" : "#ffffff";
-      const secondBg = idx % 2 ? "#eef2ff" : "#f4f4f5";
-      drawCells(cols1, [label, n(svc?.coperti), pdfMoney(svc?.contanti), pdfMoney(posLordo), pdfMoney(fee), pdfMoney(posNetto), pdfMoney(svc?.asporto), pdfMoney(svc?.bancone)], baseBg, 6.2, true);
-      drawCells(cols2, ["", pdfMoney(svc?.servizio), n(svc?.pizze), n(svc?.copertiRistorante), n(svc?.menu), n(svc?.supplementi), n(svc?.portate)], secondBg, 6.2, false);
-      y += 2;
-    }
+    y = ensureSpace(y, 22, "Report dettagliato giorno per giorno");
+    text(margin, y, "Report dettagliato giorno per giorno", 11, true, "left", bodyW); y += 14;
     (payload.records || []).sort((a,b)=>String(a.data||"").localeCompare(String(b.data||""))).forEach((rec, dayIdx) => {
       const row = (payload.dayRows || []).find(r => r.data === rec.data) || {};
       const banchetti = (getBanchettiList(rec) || []).filter(isRealBanchetto);
-      const needed = 56 + (banchetti.length * 24);
-      y = ensureSpace(y, Math.min(needed, 120), "Report dettagliato giorno per giorno");
+      y = ensureSpace(y, 40, "Report dettagliato giorno per giorno");
       const bg = dayBg(rec.data, dayIdx);
-      fillRect(margin, y - 8, bodyW, 22, bg);
-      text(margin + 4, y + 1, formatDateWithDay(rec.data, false), 8.8, true, "left", 0, bodyW * 0.34);
-      text(W - margin - 4, y + 1, `Uscite: forn. ${pdfMoney(row.usciteFornitori)} / dip. ${pdfMoney(row.usciteDipendenti)}`, 6.1, true, "right", 0, bodyW * 0.42);
-      text(W - margin - 4, y + 11, `Saldi: cont. ${pdfMoney(row.saldoContanti)} / POS ${pdfMoney(row.saldoPos)}`, 6.1, true, "right", 0, bodyW * 0.42);
-      y += 25;
-      drawHeader(cols1);
-      renderServiceBlock("Pranzo", getService(rec, "pranzo"), 0);
-      renderServiceBlock("Cena", getService(rec, "cena"), 1);
+      fillRect(margin, y, bodyW, 30, bg);
+      strokeRect(margin, y, bodyW, 30, "#cbd5e1");
+      text(margin + 5, y + 10, formatDateWithDay(rec.data, false), 9.2, true, "left", 210);
+      text(margin + 5, y + 22, `Fornitori ${pdfMoney(row.usciteFornitori)} - Dipendenti ${pdfMoney(row.usciteDipendenti)}`, 6.6, true, "left", 250);
+      text(W - margin - 5, y + 10, `Saldo contanti ${pdfMoney(row.saldoContanti)}`, 6.8, true, "right", 220);
+      text(W - margin - 5, y + 22, `Saldo POS netto ${pdfMoney(row.saldoPos)}`, 6.8, true, "right", 220);
+      y += 35;
+      y = drawServiceCard(y, "Pranzo", getService(rec, "pranzo"), 0);
+      y = drawServiceCard(y, "Cena", getService(rec, "cena"), 1);
       if (banchetti.length) {
         y = ensureSpace(y, 18, "Report dettagliato giorno per giorno");
-        text(margin, y, `Banchetti: ${banchetti.length}`, 8, true); y += 10;
-        drawHeader(cols1);
-        banchetti.forEach((b, idx) => renderServiceBlock(b.nome || `Banchetto ${idx + 1}`, b, idx + 2));
+        text(margin, y, `Banchetti (${banchetti.length})`, 8.2, true, "left", bodyW); y += 10;
+        banchetti.forEach((b, idx) => {
+          y = drawServiceCard(y, b.nome || `Banchetto ${idx + 1}`, b, idx + 2);
+        });
       }
-      y += 6;
+      y += 8;
     });
   } else {
-    y = ensureSpace(y, 40, "Report semplificato giorno per giorno");
-    text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14;
-    const dayCols = fitCols([
-      ["Data", 86], ["Cop.P+C", 34], ["Contanti", 52], ["POS lordo", 52], ["POS netto", 52], ["Banchetti", 38], ["Cop.banq", 38],
-      ["Fornitori", 52], ["Dipendenti", 52], ["Saldo cont.", 62], ["Saldo POS", 62]
-    ]);
-    const tableW = dayCols.reduce((a,c)=>a+c[1],0);
-    function renderDayHeader() {
-      headerFill(margin, y - 8, tableW, 13);
-      let hx = margin;
-      dayCols.forEach(([h,w], i) => { text(i === 0 ? hx + 2 : hx + w - 3, y, h, 5.2, true, i === 0 ? "left" : "right", 0, w - 5); hx += w; });
-      y += 8; line(margin, y, margin + tableW, y); y += 7;
-    }
-    renderDayHeader();
+    y = ensureSpace(y, 28, "Report semplificato giorno per giorno");
+    text(margin, y, "Report semplificato giorno per giorno", 11, true, "left", bodyW); y += 12;
+    const cols = [
+      ["Data", 83, "left"], ["Cop.P+C", 42, "right"], ["Contanti", 62, "right"], ["POS lordo", 62, "right"], ["POS netto", 62, "right"],
+      ["Banchetti", 44, "right"], ["Cop.banq", 46, "right"], ["Fornitori", 66, "right"], ["Dipendenti", 66, "right"], ["Saldo cont.", 76, "right"], ["Saldo POS", 76, "right"]
+    ];
+    y = tableHeader(y, cols);
     (payload.dayRows || []).forEach((row, idx) => {
-      if (y + 12 > H - margin) { addPage(); y = margin; text(margin, y, "Report semplificato giorno per giorno", 12, true); y += 14; renderDayHeader(); }
-      fillRect(margin, y - 7, tableW, 11, dayBg(row.data, idx));
-      let dx = margin;
+      y = ensureSpace(y, 15, "Report semplificato giorno per giorno");
       const vals = [formatDateWithDay(row.data, true), row.copertiPranzoCena, pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posNetto), row.banchettiCount, row.banchettiCoperti, pdfMoney(row.usciteFornitori), pdfMoney(row.usciteDipendenti), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)];
-      dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 5.2, false, i === 0 ? "left" : "right", 0, w - 5); dx += w; });
-      y += 10;
+      y = tableRow(y, cols, vals, dayBg(row.data, idx), false);
     });
   }
 
+  addFooter();
   const objects = [];
   function addObj(content) { objects.push(content); return objects.length; }
   addObj("<< /Type /Catalog /Pages 2 0 R >>");
@@ -3888,6 +3914,7 @@ function buildReportPdfDocument(payload, mode = "simple") {
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
   return pdf;
 }
+
 function downloadReportPdf(payload, mode = "simple") {
   const pdf = buildReportPdfDocument(payload, mode);
   const blob = new Blob([pdf], { type: "application/pdf" });
