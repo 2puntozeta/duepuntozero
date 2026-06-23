@@ -3555,20 +3555,179 @@ function buildReportPrintHtml(payload) {
     <table><thead><tr><th>Data</th><th>Cop.</th><th>Cop. rist.</th><th>Menù</th><th>Pizze</th><th>Suppl.</th><th>Portate</th><th>Asporto</th><th>Pranzo</th><th>Cena</th><th>Banchetti</th><th>Bancone</th><th>Contanti inc.</th><th>POS lordo</th><th>SumUp</th><th>POS netto</th><th>Uscite cont.</th><th>Uscite POS</th><th>Saldo cont.</th><th>Saldo POS</th></tr></thead><tbody>${dayRows}</tbody></table>
   </body></html>`;
 }
+function pdfCleanText(value) {
+  return String(value ?? "")
+    .replace(/€/g, "EUR")
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, "-")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function pdfMoney(value) {
+  return pdfCleanText(euro(value));
+}
+function pdfEscape(value) {
+  return pdfCleanText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+function buildReportPdfDocument(payload) {
+  const W = 842; // A4 landscape in points
+  const H = 595;
+  const margin = 22;
+  const pages = [];
+  let ops = [];
+  function addPage() { ops = []; pages.push(ops); }
+  function py(y) { return H - y; }
+  function text(x, y, str, size = 8, bold = false, align = "left") {
+    const clean = pdfEscape(str);
+    const approxWidth = clean.length * size * 0.46;
+    const tx = align === "right" ? Math.max(margin, x - approxWidth) : x;
+    ops.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${tx.toFixed(2)} ${py(y).toFixed(2)} Td (${clean}) Tj ET`);
+  }
+  function line(x1, y1, x2, y2) {
+    ops.push(`${x1.toFixed(2)} ${py(y1).toFixed(2)} m ${x2.toFixed(2)} ${py(y2).toFixed(2)} l S`);
+  }
+  function rect(x, y, w, h) {
+    ops.push(`${x.toFixed(2)} ${py(y + h).toFixed(2)} ${w.toFixed(2)} ${h.toFixed(2)} re S`);
+  }
+  function ensureSpace(y, needed, title) {
+    if (y + needed <= H - margin) return y;
+    addPage();
+    let ny = margin;
+    if (title) { text(margin, ny, title, 13, true); ny += 18; line(margin, ny, W - margin, ny); ny += 10; }
+    return ny;
+  }
+
+  const rangeText = payload.range?.from || payload.range?.to ? `${formatDate(payload.range.from)} - ${formatDate(payload.range.to)}` : "Tutto l'archivio";
+  addPage();
+  let y = margin;
+  text(margin, y, payload.label || "Report", 18, true); y += 16;
+  text(margin, y, `Periodo: ${rangeText} - generato il ${formatDateTime(new Date().toISOString())}`, 9); y += 16;
+  line(margin, y, W - margin, y); y += 14;
+
+  const summary = [
+    ["Giornate", payload.records?.length || 0],
+    ["Incasso lordo", pdfMoney(payload.incasso)],
+    ["Incasso netto", pdfMoney(payload.incassoNetto)],
+    ["Commissioni SumUp", pdfMoney(payload.commissioni)],
+    ["Coperti", payload.servizioTotali?.totale?.coperti || 0],
+    ["Menu", payload.servizioTotali?.totale?.menu || 0],
+    ["Pizze", payload.servizioTotali?.totale?.pizze || 0],
+    ["Portate", payload.servizioTotali?.totale?.portate || 0],
+    ["Asporto", pdfMoney(payload.asporto)],
+    ["Pranzo", pdfMoney(payload.servizioPranzo)],
+    ["Cena", pdfMoney(payload.servizioCena)],
+    ["Banchetti", pdfMoney(payload.servizioBanchetti)],
+  ];
+  const cardW = (W - margin * 2 - 18) / 4;
+  summary.forEach((item, idx) => {
+    const col = idx % 4;
+    const row = Math.floor(idx / 4);
+    const x = margin + col * (cardW + 6);
+    const yy = y + row * 42;
+    rect(x, yy, cardW, 34);
+    text(x + 6, yy + 11, item[0], 7, false);
+    text(x + 6, yy + 25, item[1], 11, true);
+  });
+  y += Math.ceil(summary.length / 4) * 42 + 10;
+
+  y = ensureSpace(y, 95, "Saldi casse a fine periodo");
+  text(margin, y, "Saldi casse a fine periodo", 13, true); y += 14;
+  const cashCols = [
+    ["Cassa", 95], ["Iniziale", 75], ["Incassi netti", 90], ["Lordo", 75], ["Commissioni", 75], ["Uscite", 75], ["Saldo finale", 85]
+  ];
+  let x = margin;
+  cashCols.forEach(([h,w]) => { text(x + 2, y, h, 7, true); x += w; });
+  y += 8; line(margin, y, W - margin, y); y += 10;
+  Object.entries(payload.endBreakdown || {}).forEach(([name,row]) => {
+    y = ensureSpace(y, 12, "Saldi casse a fine periodo");
+    let cx = margin;
+    const vals = [cashLabel(name), pdfMoney(row.iniziale), pdfMoney(row.incassi), pdfMoney(row.lordo), pdfMoney(row.commissioni), pdfMoney(row.uscite), pdfMoney(row.saldo)];
+    cashCols.forEach(([_,w], i) => { text(i === 0 ? cx + 2 : cx + w - 4, y, vals[i], 7, i === 6, i === 0 ? "left" : "right"); cx += w; });
+    y += 10;
+  });
+  y += 10;
+
+  y = ensureSpace(y, 60, "Dettaglio giorno per giorno");
+  text(margin, y, "Dettaglio giorno per giorno", 13, true); y += 14;
+  const dayCols = [
+    ["Data", 54], ["Cop.", 28], ["Menu", 30], ["Pizze", 32], ["Port.", 32],
+    ["Contanti", 58], ["POS lordo", 58], ["SumUp", 48], ["POS netto", 58],
+    ["Usc.cont.", 58], ["Usc.POS", 54], ["Saldo cont.", 65], ["Saldo POS", 65]
+  ];
+  function renderDayHeader() {
+    let hx = margin;
+    dayCols.forEach(([h,w]) => { text(hx + (h === "Data" ? 2 : w - 3), y, h, 6.5, true, h === "Data" ? "left" : "right"); hx += w; });
+    y += 8; line(margin, y, W - margin, y); y += 8;
+  }
+  renderDayHeader();
+  (payload.dayRows || []).forEach(row => {
+    if (y + 12 > H - margin) { addPage(); y = margin; text(margin, y, "Dettaglio giorno per giorno", 13, true); y += 14; renderDayHeader(); }
+    let dx = margin;
+    const vals = [
+      formatDate(row.data), row.coperti, row.menu, row.pizze, row.portate,
+      pdfMoney(row.contanti), pdfMoney(row.posLordo), pdfMoney(row.posCommissioni), pdfMoney(row.posNetto),
+      pdfMoney(row.usciteContanti), pdfMoney(row.uscitePos), pdfMoney(row.saldoContanti), pdfMoney(row.saldoPos)
+    ];
+    dayCols.forEach(([_,w], i) => { text(i === 0 ? dx + 2 : dx + w - 3, y, vals[i], 6.5, false, i === 0 ? "left" : "right"); dx += w; });
+    y += 10;
+  });
+
+  const objects = [];
+  function addObj(content) { objects.push(content); return objects.length; }
+  addObj("<< /Type /Catalog /Pages 2 0 R >>");
+  addObj("PAGES_PLACEHOLDER");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  const pageIds = [];
+  pages.forEach(pageOps => {
+    const content = pageOps.join("\n");
+    const contentId = addObj(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    const pageId = addObj(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`);
+    pageIds.push(pageId);
+  });
+  objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((obj, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${obj}\nendobj\n`;
+  });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (let i = 1; i <= objects.length; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return pdf;
+}
+function downloadReportPdf(payload) {
+  const pdf = buildReportPdfDocument(payload);
+  const blob = new Blob([pdf], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const base = pdfCleanText(payload.label || "report").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "report";
+  a.href = url;
+  a.download = `${base}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
 function exportCurrentReportPdf() {
   if (!lastReportPayload) {
     showGlobalMessage("Genera prima un report.", "error");
     return;
   }
-  const win = window.open("", "_blank");
-  if (!win) {
-    showGlobalMessage("Popup bloccato: consenti i popup per stampare/salvare il PDF.", "error");
-    return;
+  try {
+    downloadReportPdf(lastReportPayload);
+    showGlobalMessage("PDF del report scaricato.", "ok");
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage("Non sono riuscito a creare il PDF. Prova a rigenerare il report e riprovare.", "error");
   }
-  win.document.open();
-  win.document.write(buildReportPrintHtml(lastReportPayload));
-  win.document.close();
-  setTimeout(() => { try { win.focus(); win.print(); } catch (err) {} }, 400);
 }
 function runMonthlyReport() {
   const month = String($("reportMonth").value).padStart(2,"0");

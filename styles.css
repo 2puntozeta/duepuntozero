@@ -359,3 +359,115 @@ input[type="checkbox"]{
   .card{box-shadow:none!important;border:1px solid #ddd!important;}
   .report-table-wrap{max-height:none!important;overflow:visible!important;}
 }
+
+
+/* V20: Report leggibile da PC + PDF vero */
+#report{
+  max-width:100%;
+}
+#report > .card{
+  overflow:visible;
+}
+#report .grid3{
+  align-items:end;
+}
+#reportSummary.grid2{
+  grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+}
+#reportSummary .card{
+  padding:13px;
+  min-width:0;
+}
+#reportSummary .card div:not(.muted){
+  font-size:20px;
+  font-weight:800;
+  margin-top:6px;
+  overflow-wrap:anywhere;
+}
+#report .metric-value.small{
+  font-size:22px;
+  line-height:1.15;
+}
+.report-table-wrap{
+  width:100%;
+  max-width:100%;
+  max-height:72vh;
+  overflow:auto;
+  -webkit-overflow-scrolling:touch;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:14px;
+  background:#020617;
+}
+.report-table{
+  width:max-content;
+  min-width:100%;
+  font-size:12px;
+  line-height:1.25;
+}
+.report-table th,
+.report-table td{
+  padding:8px 9px;
+  white-space:nowrap;
+  text-align:right;
+}
+.report-table th:first-child,
+.report-table td:first-child{
+  text-align:left;
+  position:sticky;
+  left:0;
+  z-index:2;
+  background:#020617;
+  box-shadow:1px 0 0 rgba(255,255,255,.08);
+}
+.report-table th{
+  position:sticky;
+  top:0;
+  z-index:3;
+  background:#111827;
+}
+.report-table th:first-child{
+  z-index:4;
+  background:#111827;
+}
+#exportReportPdfBtn{
+  white-space:nowrap;
+}
+@media (min-width:981px){
+  #report .toolbar{
+    display:flex;
+    align-items:flex-start;
+  }
+  #report .grid4{
+    grid-template-columns:repeat(4,minmax(0,1fr));
+  }
+  #report .grid3{
+    grid-template-columns:1fr 1fr auto;
+  }
+  #report .field button,
+  #exportReportPdfBtn{
+    min-width:190px;
+  }
+}
+@media (max-width:780px){
+  #reportSummary.grid2{
+    grid-template-columns:1fr;
+  }
+  #report .grid3{
+    grid-template-columns:1fr;
+  }
+  #report .field button,
+  #exportReportPdfBtn{
+    width:100%;
+  }
+  .report-table-wrap{
+    max-height:64vh;
+    margin:0;
+  }
+  .report-table{
+    font-size:12px;
+    min-width:1380px;
+  }
+  .report-table th,.report-table td{
+    padding:9px 8px;
+  }
+}
