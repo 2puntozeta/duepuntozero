@@ -286,6 +286,33 @@ function supplierInputValue(row = {}) {
   if (row.supplier_id) return (state.suppliers || []).find(s => s.id === row.supplier_id)?.nome || "";
   return "";
 }
+function employeeDatalistOptions() {
+  const seen = new Set();
+  return (state.employees || []).map(e => {
+    const clean = String(e.nome || "").trim();
+    if (!clean) return "";
+    const key = normalizeSearchText(clean);
+    if (seen.has(key)) return "";
+    seen.add(key);
+    const role = e.ruolo ? ` · ${e.ruolo}` : "";
+    return `<option value="${escapeHtml(clean)}" label="${escapeHtml(clean + role)}"></option>`;
+  }).join("");
+}
+function refreshEmployeesDatalist() {
+  const el = safeEl("employeesDatalist");
+  if (el) el.innerHTML = employeeDatalistOptions();
+}
+function findEmployeeByName(value) {
+  const needle = normalizeSearchText(value);
+  if (!needle) return null;
+  return (state.employees || []).find(e => normalizeSearchText(e.nome) === needle) || null;
+}
+function employeeInputValue(row = {}) {
+  if (row.employee_search) return row.employee_search;
+  if (row.employee_name) return row.employee_name;
+  if (row.employee_id) return (state.employees || []).find(e => e.id === row.employee_id)?.nome || "";
+  return "";
+}
 
 
 const SERVICE_NUMBER_FIELDS = ["coperti", "contanti", "pos", "asporto", "servizio", "bancone", "pizze", "copertiRistorante", "menu", "supplementi", "portate"];
@@ -519,8 +546,10 @@ function employeePaymentRowsFromMovements(dateStr) {
   return (state.employeeMovements || [])
     .filter(m => m.data === dateStr && !isDailyAutoLinkedMovement(m, dateStr))
     .map(m => {
+      const employee = state.employees.find(e => e.id === m.employee_id);
       return {
         employee_id: m.employee_id || "",
+        employee_search: employee?.nome || "",
         new_employee_name: "",
         tipo: m.tipo || "acconto",
         cassa: extractCashFromNote(m.nota, "contanti"),
@@ -578,8 +607,8 @@ function addDailyEmployeePaymentRow(row = {}) {
     <input data-field="source_kind" type="hidden" value="${escapeHtml(row.source_kind || "")}" />
     <input data-field="source_id" type="hidden" value="${escapeHtml(row.source_id || "")}" />
     ${sourceInfo}
-    <div class="field"><label>Dipendente esistente</label><select data-field="employee_id">${employeeSelectOptions(row.employee_id || "")}</select></div>
-    <div class="field"><label>Nuovo dipendente</label><input data-field="new_employee_name" value="${escapeHtml(row.new_employee_name || "")}" placeholder="scrivi qui se non esiste" /></div>
+    <div class="field"><label>Cerca dipendente</label><input data-field="employee_search" list="employeesDatalist" value="${escapeHtml(employeeInputValue(row))}" placeholder="inizia a scrivere il nome" autocomplete="off" /><input data-field="employee_id" type="hidden" value="${escapeHtml(row.employee_id || "")}" /></div>
+    <div class="field"><label>Nuovo dipendente</label><input data-field="new_employee_name" value="${escapeHtml(row.new_employee_name || "")}" placeholder="opzionale: se non esiste" /></div>
     <div class="field"><label>Tipo</label><select data-field="tipo"><option value="acconto" ${(row.tipo || "acconto") === "acconto" ? "selected" : ""}>Acconto</option><option value="pagamento" ${row.tipo === "pagamento" ? "selected" : ""}>Pagamento</option><option value="extra" ${row.tipo === "extra" ? "selected" : ""}>Extra</option></select></div>
     <div class="field"><label>Cassa</label><select data-field="cassa">${cashSelectOptions(row.cassa || "contanti")}</select></div>
     <div class="field"><label>Importo</label><input data-field="importo" type="number" step="0.01" value="${n(row.importo)}" /></div>
@@ -605,10 +634,11 @@ function collectDailySupplierPayments() {
   return Array.from(safeEl("dailySupplierPayments")?.querySelectorAll(".daily-supplier-row") || []).map(row => {
     const supplierSearch = row.querySelector('[data-field="supplier_search"]')?.value?.trim() || "";
     const supplier = findSupplierByNameOrAlias(supplierSearch);
+    const explicitNew = row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "";
     return {
       supplier_id: supplier?.id || row.querySelector('[data-field="supplier_id"]')?.value || "",
       supplier_search: supplierSearch,
-      new_supplier_name: row.querySelector('[data-field="new_supplier_name"]')?.value?.trim() || "",
+      new_supplier_name: explicitNew || (!supplier && supplierSearch ? supplierSearch : ""),
       cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
       importo: n(row.querySelector('[data-field="importo"]')?.value),
       operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
@@ -619,17 +649,23 @@ function collectDailySupplierPayments() {
   }).filter(row => (row.supplier_id || row.new_supplier_name) && row.importo > 0);
 }
 function collectDailyEmployeePayments() {
-  return Array.from(safeEl("dailyEmployeePayments")?.querySelectorAll(".daily-employee-row") || []).map(row => ({
-    employee_id: row.querySelector('[data-field="employee_id"]')?.value || "",
-    new_employee_name: row.querySelector('[data-field="new_employee_name"]')?.value?.trim() || "",
-    tipo: row.querySelector('[data-field="tipo"]')?.value || "acconto",
-    cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
-    importo: n(row.querySelector('[data-field="importo"]')?.value),
-    operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
-    nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
-    source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
-    source_id: row.querySelector('[data-field="source_id"]')?.value || "",
-  })).filter(row => (row.employee_id || row.new_employee_name) && row.importo > 0);
+  return Array.from(safeEl("dailyEmployeePayments")?.querySelectorAll(".daily-employee-row") || []).map(row => {
+    const employeeSearch = row.querySelector('[data-field="employee_search"]')?.value?.trim() || "";
+    const employee = findEmployeeByName(employeeSearch);
+    const explicitNew = row.querySelector('[data-field="new_employee_name"]')?.value?.trim() || "";
+    return {
+      employee_id: employee?.id || row.querySelector('[data-field="employee_id"]')?.value || "",
+      employee_search: employeeSearch,
+      new_employee_name: explicitNew || (!employee && employeeSearch ? employeeSearch : ""),
+      tipo: row.querySelector('[data-field="tipo"]')?.value || "acconto",
+      cassa: row.querySelector('[data-field="cassa"]')?.value || "contanti",
+      importo: n(row.querySelector('[data-field="importo"]')?.value),
+      operated_at: cleanDateTimeLocal(row.querySelector('[data-field="operated_at"]')?.value),
+      nota: row.querySelector('[data-field="nota"]')?.value?.trim() || "",
+      source_kind: row.querySelector('[data-field="source_kind"]')?.value || "",
+      source_id: row.querySelector('[data-field="source_id"]')?.value || "",
+    };
+  }).filter(row => (row.employee_id || row.employee_search || row.new_employee_name) && row.importo > 0);
 }
 function collectLegacyDailyFromFormOnly() {
   return {
@@ -2110,9 +2146,11 @@ async function getOrCreateSupplierFromDaily(row) {
 }
 async function getOrCreateEmployeeFromDaily(row) {
   if (row.employee_id) return state.employees.find(e => e.id === row.employee_id) || null;
-  const name = String(row.new_employee_name || "").trim();
+  const searched = findEmployeeByName(row.employee_search);
+  if (searched) return searched;
+  const name = String(row.new_employee_name || row.employee_search || "").trim();
   if (!name) return null;
-  const existing = state.employees.find(e => String(e.nome || "").toLowerCase() === name.toLowerCase());
+  const existing = findEmployeeByName(name);
   if (existing) return existing;
   const { data, error } = await supabase.from("employees").insert({
     company_id: state.activeCompany.id,
@@ -2146,15 +2184,15 @@ async function syncDailyLinkedMovements(rec) {
 
   const employeeRows = [];
   const employeeRowsToInsert = [];
-  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name) && n(p.importo) > 0)) {
+  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.employee_search || p.new_employee_name) && n(p.importo) > 0)) {
     if (p.source_id) {
-      const employee = state.employees.find(e => e.id === p.employee_id);
-      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
+      const employee = state.employees.find(e => e.id === p.employee_id) || findEmployeeByName(p.employee_search);
+      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome, employee_search: employee.nome });
       continue;
     }
     const employee = await getOrCreateEmployeeFromDaily(p);
     if (employee) {
-      const row = { ...p, employee_id: employee.id, employee_name: employee.nome };
+      const row = { ...p, employee_id: employee.id, employee_name: employee.nome, employee_search: employee.nome };
       employeeRows.push(row);
       employeeRowsToInsert.push(row);
     }
@@ -2689,7 +2727,7 @@ async function deleteEmployeeByName(name) {
   }
 }
 async function saveEmployeeMovement() {
-  const employee = state.employees.find(e => e.nome === $("dipMovNome").value);
+  const employee = findEmployeeByName($("dipMovNome").value);
   const payload = {
     employeeId: employee?.id,
     data: safeEl("dipMovData")?.value || dateFromDateTimeOrDate(safeEl("dipMovOperatedAt")?.value, todayStr()),
@@ -3023,7 +3061,10 @@ function renderSupplierDetail() {
   }
 }
 function renderEmployees() {
-  if (safeEl("dipMovNome")) $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${e.nome}">${escapeHtml(e.nome)}</option>`).join("");
+  refreshEmployeesDatalist();
+  if (safeEl("dipMovNome") && safeEl("dipMovNome").tagName === "SELECT") {
+    $("dipMovNome").innerHTML = state.employees.map(e => `<option value="${escapeHtml(e.nome)}">${escapeHtml(e.nome)}</option>`).join("");
+  }
   const table = safeEl("dipendentiTable");
   if (!table) return;
   const month = getCurrentMonthPrefix();

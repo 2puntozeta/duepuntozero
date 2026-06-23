@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Gestionale Privato</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -302,7 +302,7 @@
             </div>
           </div>
 
-          <div class="toolbar">
+          <div class="toolbar save-toolbar">
             <div id="giornalieraFeedback" class="muted"></div>
             <button id="saveDayBtn">Salva giornata e aggiorna schede</button>
           </div>
@@ -470,7 +470,7 @@
           <div class="card">
             <h3>Pagamento / extra</h3>
             <div class="grid4">
-              <div class="field"><label>Dipendente</label><select id="dipMovNome"></select></div>
+              <div class="field"><label>Dipendente</label><input id="dipMovNome" list="employeesDatalist" placeholder="Cerca dipendente" autocomplete="off" /><datalist id="employeesDatalist"></datalist></div>
               <div class="field"><label>Data contabile</label><input id="dipMovData" type="date" /></div>
               <div class="field"><label>Data/ora reale (facoltativa)</label><input id="dipMovOperatedAt" type="datetime-local" /></div>
               <div class="field"><label>Tipo</label><select id="dipMovTipo"><option value="pagamento">Pagamento</option><option value="extra">Extra</option><option value="acconto">Acconto</option></select></div>
@@ -633,6 +633,29 @@
     </div>
   </div>
 
+
+  <script>
+    // Migliora l'uso da telefono: tastierino numerico corretto e meno zoom automatico sugli input.
+    (function () {
+      function tuneMobileInputs(root) {
+        (root || document).querySelectorAll('input[type="number"]').forEach(function (input) {
+          input.setAttribute('inputmode', 'decimal');
+          input.setAttribute('autocomplete', 'off');
+        });
+      }
+      document.addEventListener('DOMContentLoaded', function () {
+        tuneMobileInputs(document);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (m) {
+            m.addedNodes.forEach(function (node) {
+              if (node && node.nodeType === 1) tuneMobileInputs(node);
+            });
+          });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      });
+    })();
+  </script>
   <script type="module" src="./app.js"></script>
 </body>
 </html>
