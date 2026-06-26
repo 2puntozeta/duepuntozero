@@ -303,6 +303,66 @@ function getDailyTotals(rec) {
   const totalCoperti = getAllServiceRows(rec || {}).reduce((a,row)=>a+n(row.service.coperti),0);
   return { totalIncasso, totalIncassoNetto, totalCommissioni, totalCoperti };
 }
+function dailyOutTotal(dateStr) {
+  const out = businessOutSumsForDate(dateStr);
+  return n(out.suppliers) + n(out.employees);
+}
+function dayProfitAfterOuts(rec) {
+  const totals = getDailyTotals(rec || {});
+  return n(totals.totalIncassoNetto) - dailyOutTotal(rec?.data);
+}
+function pickDailyRecord(metricFn) {
+  const rows = (state.dailyRecords || []).filter(r => r?.data);
+  if (!rows.length) return null;
+  return rows.reduce((best, row) => {
+    const value = n(metricFn(row));
+    const bestValue = best ? n(metricFn(best)) : -Infinity;
+    if (!best || value > bestValue) return row;
+    if (value === bestValue && String(row.data || "") > String(best.data || "")) return row;
+    return best;
+  }, null);
+}
+function renderDashboardRecords() {
+  const box = safeEl("dashboardRecordsBox");
+  if (!box) return;
+  const mostCoperti = pickDailyRecord(r => getDailyTotals(r).totalCoperti);
+  const mostIncasso = pickDailyRecord(r => getDailyTotals(r).totalIncasso);
+  const bestAfterOuts = pickDailyRecord(r => dayProfitAfterOuts(r));
+  const card = (title, rec, main, detail) => rec ? `
+    <div class="record-card item">
+      <div>
+        <strong>${escapeHtml(title)}</strong>
+        <small>${formatDateWithDay(rec.data, false)}</small>
+        <div class="metric-value small">${main(rec)}</div>
+        <small>${detail(rec)}</small>
+      </div>
+      <button class="btn ghost record-open-btn" data-record-date="${escapeHtml(rec.data)}" type="button">Apri</button>
+    </div>` : `
+    <div class="record-card item">
+      <div><strong>${escapeHtml(title)}</strong><small>Nessuna scheda caricata.</small></div>
+    </div>`;
+  box.innerHTML = [
+    card(
+      "Più coperti",
+      mostCoperti,
+      r => String(getDailyTotals(r).totalCoperti),
+      r => `Incasso lordo ${euro(getDailyTotals(r).totalIncasso)} · netto ${euro(getDailyTotals(r).totalIncassoNetto)}`
+    ),
+    card(
+      "Più incasso POS + contanti",
+      mostIncasso,
+      r => euro(getDailyTotals(r).totalIncasso),
+      r => `Netto ${euro(getDailyTotals(r).totalIncassoNetto)} · coperti ${getDailyTotals(r).totalCoperti}`
+    ),
+    card(
+      "Miglior incasso tolte le uscite",
+      bestAfterOuts,
+      r => euro(dayProfitAfterOuts(r)),
+      r => `Netto ${euro(getDailyTotals(r).totalIncassoNetto)} - uscite ${euro(dailyOutTotal(r.data))}`
+    ),
+  ].join("");
+  document.querySelectorAll(".record-open-btn").forEach(btn => btn.addEventListener("click", () => loadDailyByDate(btn.dataset.recordDate)));
+}
 function getCurrentMonthPrefix() { return todayStr().slice(0, 7); }
 function monthMatches(dateStr, monthPrefix) { return !monthPrefix || String(dateStr || "").startsWith(monthPrefix); }
 function dailyAutoPrefix(dateStr) { return `[scheda giornaliera ${dateStr}]`; }
@@ -3288,6 +3348,7 @@ function renderDashboard() {
     document.querySelectorAll(".alert-ack-btn").forEach(btn => btn.addEventListener("click", (e)=>{ e.stopPropagation(); const a = alerts[Number(btn.dataset.alertIdx)]; if (a) acknowledgeAlert(a.title, a.text); }));
     document.querySelectorAll(".alert-row").forEach(row => row.addEventListener("click", ()=>openAlertModalByDate(row.dataset.alertDate)));
   }
+  renderDashboardRecords();
   if (safeEl("cashSummary")) {
     const breakdown = computeCashBreakdown();
     $("cashSummary").innerHTML = Object.entries(breakdown).map(([k,row]) => {

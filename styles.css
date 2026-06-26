@@ -517,3 +517,13 @@ input[type="checkbox"]{
   #movimentiGlobalTable td { min-width: 120px; }
   .alert-row .toolbar { flex-direction: column; align-items: stretch; }
 }
+
+/* V31: record sintetici in dashboard */
+.dashboard-records-card{margin:16px 0;}
+.record-card{align-items:flex-start;gap:10px;}
+.record-card .metric-value.small{margin:6px 0 4px 0;}
+.record-card button{white-space:nowrap;}
+@media (max-width: 980px){
+  .dashboard-records-card{margin:14px 0;}
+  .record-card{align-items:stretch;}
+}
