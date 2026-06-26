@@ -35,6 +35,9 @@ let editingSupplierMovementId = null;
 let editingEmployeeMovementId = null;
 let cloudSyncCheckInProgress = false;
 let lastReportPayload = null;
+let lastMovementsPayload = null;
+let silentRefreshInProgress = false;
+const ALERT_ACK_PREFIX = "gestionale_alert_ack_v30";
 
 const $ = (id) => document.getElementById(id);
 const safeEl = (id) => document.getElementById(id);
@@ -116,6 +119,40 @@ const isSupervisor = () => state.profile?.global_role === "supervisor";
 const REMEMBER_EMAIL_KEY = "gestionale_remember_email";
 const REMEMBER_EMAIL_VALUE_KEY = "gestionale_remember_email_value";
 const POS_SUMUP_FEE_RATE = 0.0095; // Commissione SumUp: 0,95% sugli incassi POS
+
+function companyScopedKey(prefix) {
+  return `${prefix}_${state.activeCompany?.id || "no-company"}`;
+}
+function alertAckKey(date, text) {
+  return `${String(date || "").slice(0,10)}|${normalizeSearchText(text || "")}`;
+}
+function loadAcknowledgedAlerts() {
+  try { return JSON.parse(localStorage.getItem(companyScopedKey(ALERT_ACK_PREFIX)) || "[]"); }
+  catch { return []; }
+}
+function isAlertAcknowledged(date, text) {
+  return loadAcknowledgedAlerts().includes(alertAckKey(date, text));
+}
+function acknowledgeAlert(date, text) {
+  const key = alertAckKey(date, text);
+  const all = new Set(loadAcknowledgedAlerts());
+  all.add(key);
+  localStorage.setItem(companyScopedKey(ALERT_ACK_PREFIX), JSON.stringify([...all]));
+  renderDashboard();
+  showGlobalMessage("Alert confermato: non lo vedrai più in dashboard, ma resta visibile nella scheda giornaliera.");
+}
+function currentMonthRange() {
+  const t = todayStr();
+  const y = Number(t.slice(0,4));
+  const m = Number(t.slice(5,7));
+  return { from: `${t.slice(0,7)}-01`, to: `${t.slice(0,7)}-${String(lastDayOfMonth(y, m)).padStart(2,"0")}` };
+}
+function rangeFromOptionalInputs(fromId, toId) {
+  const from = safeEl(fromId)?.value || "";
+  const to = safeEl(toId)?.value || "";
+  if (from || to) return reportDateRange(from, to);
+  return currentMonthRange();
+}
 
 function loadRememberedEmail() {
   try {
@@ -1046,6 +1083,8 @@ function buildLatestActivities(limit = 12) {
   (state.dailyRecords || []).forEach(r => {
     const totals = getDailyTotals(r);
     rows.push({
+      kind: "daily",
+      id: r.data || "",
       savedAt: r.saved_at || r.created_at || "",
       data: r.data || "",
       title: `Scheda giornaliera ${r.data || ""}`,
@@ -1058,6 +1097,9 @@ function buildLatestActivities(limit = 12) {
     const supplier = (state.suppliers || []).find(s => s.id === m.supplier_id);
     const isPayment = isSupplierPaymentType(m.tipo);
     rows.push({
+      kind: "supplier",
+      id: m.id,
+      ownerId: m.supplier_id,
       savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
       data: m.data || "",
       title: `${isPayment ? "Pagamento" : "Movimento"} fornitore · ${supplier?.nome || "Fornitore"}`,
@@ -1069,6 +1111,9 @@ function buildLatestActivities(limit = 12) {
   (state.employeeMovements || []).forEach(m => {
     const employee = (state.employees || []).find(e => e.id === m.employee_id);
     rows.push({
+      kind: "employee",
+      id: m.id,
+      ownerId: m.employee_id,
       savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
       data: m.data || "",
       title: `${typeLabel(m.tipo)} dipendente · ${employee?.nome || "Dipendente"}`,
@@ -1081,6 +1126,8 @@ function buildLatestActivities(limit = 12) {
     .filter(m => !isDailyAutoLinkedMovement(m, m.data))
     .forEach(m => {
       rows.push({
+        kind: "cash",
+        id: m.id,
         savedAt: m.saved_at || m.created_at || m.operated_at || m.data || "",
         data: m.data || "",
         title: `${m.tipo === "entrata" ? "Entrata" : "Uscita"} cassa · ${cashLabel(m.cassa || "contanti")}`,
@@ -1089,10 +1136,10 @@ function buildLatestActivities(limit = 12) {
         amountType: m.tipo === "entrata" ? "in" : "out",
       });
     });
-  return rows
+  const sorted = rows
     .filter(r => r.savedAt || r.data)
-    .sort((a,b) => (parseActivityTime(b.savedAt) || parseActivityTime(b.data)) - (parseActivityTime(a.savedAt) || parseActivityTime(a.data)))
-    .slice(0, limit);
+    .sort((a,b) => (parseActivityTime(b.savedAt) || parseActivityTime(b.data)) - (parseActivityTime(a.savedAt) || parseActivityTime(a.data)));
+  return limit && limit > 0 ? sorted.slice(0, limit) : sorted;
 }
 function renderLatestActivity() {
   const box = safeEl("latestActivityBox");
@@ -1109,6 +1156,77 @@ function renderLatestActivity() {
       <div class="activity-amount">${activityAmountHtml(row.amount, row.amountType)}</div>
     </div>`).join("") : `<div class="alert okline">Ancora nessun movimento registrato.</div>`;
 }
+
+function filteredLatestMovements() {
+  const from = safeEl("movFilterFrom")?.value || "";
+  const to = safeEl("movFilterTo")?.value || "";
+  const type = safeEl("movFilterType")?.value || "all";
+  const search = normalizeSearchText(safeEl("movFilterSearch")?.value || "");
+  return buildLatestActivities(0).filter(row => {
+    const d = String(row.data || "").slice(0,10);
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    if (type !== "all" && row.kind !== type) return false;
+    if (search) {
+      const hay = normalizeSearchText(`${row.title || ""} ${row.detail || ""} ${row.amount || ""}`);
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+}
+function openMovementSource(row) {
+  if (!row) return;
+  if (row.kind === "daily") return loadDailyByDate(row.id || row.data);
+  if (row.kind === "supplier") {
+    selectedSupplierDetailId = row.ownerId;
+    navigate("fornitori");
+    renderSupplierDetail();
+    if (row.id) startSupplierMovementEdit(row.id);
+    return;
+  }
+  if (row.kind === "employee") {
+    selectedEmployeeDetailId = row.ownerId;
+    navigate("dipendenti");
+    renderEmployeeDetail();
+    if (row.id) startEmployeeMovementEdit(row.id);
+    return;
+  }
+  if (row.kind === "cash") {
+    const movement = state.cashMovements.find(m => String(m.id) === String(row.id));
+    if (movement) startCashMovementEdit(movement);
+  }
+}
+function renderMovementsSection() {
+  const tbody = safeEl("movimentiGlobalTable");
+  if (!tbody) return;
+  const rows = filteredLatestMovements();
+  lastMovementsPayload = rows;
+  if (safeEl("movimentiCount")) $("movimentiCount").textContent = `${rows.length} movimenti visualizzati`;
+  tbody.innerHTML = rows.length ? rows.map((row, idx) => `<tr class="${isWeekend(row.data) ? 'weekend-row' : (idx % 2 ? 'alt-row' : '')}">
+    <td>${formatDateWithDay(row.data, true)}</td>
+    <td>${row.kind === 'daily' ? 'Scheda' : row.kind === 'supplier' ? 'Fornitore' : row.kind === 'employee' ? 'Dipendente' : 'Cassa'}</td>
+    <td><strong>${escapeHtml(row.title)}</strong><br><small>${escapeHtml(row.detail)}</small></td>
+    <td>${formatOperationDateTime(row)}</td>
+    <td>${formatDateTime(row.savedAt || row.data)}</td>
+    <td>${activityAmountHtml(row.amount, row.amountType)}</td>
+    <td><button class="btn ghost movement-open-btn" data-idx="${idx}">Apri/modifica</button></td>
+  </tr>`).join("") : `<tr><td colspan="7">Nessun movimento trovato.</td></tr>`;
+  document.querySelectorAll(".movement-open-btn").forEach(btn => btn.addEventListener("click", () => openMovementSource(rows[Number(btn.dataset.idx)])));
+}
+function exportMovementsPdf() {
+  const rows = filteredLatestMovements();
+  const from = safeEl("movFilterFrom")?.value || "";
+  const to = safeEl("movFilterTo")?.value || "";
+  const type = safeEl("movFilterType")?.value || "all";
+  const lines = [
+    `Filtri: ${from || 'inizio'} -> ${to || 'fine'} · tipo ${type}`,
+    `Movimenti: ${rows.length}`,
+    "",
+    ...rows.map(r => `${formatDateWithDay(r.data, false)} · ${r.kind} · ${r.title} · ${r.detail} · ${r.amountType === 'out' ? '-' : r.amountType === 'in' ? '+' : ''}${euro(r.amount)}`)
+  ];
+  downloadBasicPdf("Ultimi movimenti", lines, "ultimi-movimenti.pdf");
+}
+
 function getMatchingCashOutMovementsForBusiness(kind, movement) {
   const name = kind === "supplier"
     ? (state.suppliers || []).find(s => s.id === movement.supplier_id)?.nome || ""
@@ -1813,7 +1931,7 @@ function renderAccountingCheck() {
     </div>`).join("") + (issues.length > 16 ? `<div class="muted small" style="margin-top:8px;">Altri ${issues.length - 16} controlli da verificare.</div>` : "");
 }
 function renderLiveChecks() {
-  renderLatestActivity();
+  renderMovementsSection();
   renderAccountingCheck();
 }
 function computeGlobalAlerts() {
@@ -2433,8 +2551,11 @@ async function syncDailyLinkedMovements(rec) {
       saved_at: new Date().toISOString(),
       nota: `${prefix} ${p.cassa || "contanti"}${p.nota ? " · " + p.nota : ""}`,
     }));
-    const { error } = await supabase.from("supplier_movements").insert(supplierMovements);
+    const { data: insertedSupplierMovements, error } = await supabase.from("supplier_movements").insert(supplierMovements).select("*");
     if (error) throw error;
+    (insertedSupplierMovements || []).forEach((m, idx) => {
+      if (supplierRowsToInsert[idx]) supplierRowsToInsert[idx].source_id = m.id;
+    });
 
     const cashMovements = supplierRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
@@ -2461,8 +2582,11 @@ async function syncDailyLinkedMovements(rec) {
       saved_at: new Date().toISOString(),
       nota: `${prefix} ${p.cassa || "contanti"}${p.nota ? " · " + p.nota : ""}`,
     }));
-    const { error } = await supabase.from("employee_movements").insert(employeeMovements);
+    const { data: insertedEmployeeMovements, error } = await supabase.from("employee_movements").insert(employeeMovements).select("*");
     if (error) throw error;
+    (insertedEmployeeMovements || []).forEach((m, idx) => {
+      if (employeeRowsToInsert[idx]) employeeRowsToInsert[idx].source_id = m.id;
+    });
 
     const cashMovements = employeeRowsToInsert.map(p => ({
       company_id: state.activeCompany.id,
@@ -2566,6 +2690,7 @@ function loadDailyByDate(dateStr) {
 
 
 function movementMatchesDailySupplierRow(row, movement) {
+  if (row.source_id && String(row.source_id) === String(movement.id)) return true;
   const cash = extractCashFromNote(movement.nota, row.cassa || "contanti");
   const note = cleanMovementNoteForForm(movement.nota);
   return String(row.supplier_id || "") === String(movement.supplier_id || "")
@@ -2575,6 +2700,7 @@ function movementMatchesDailySupplierRow(row, movement) {
     && normalizeSearchText(row.nota || "") === normalizeSearchText(note || "");
 }
 function movementMatchesDailyEmployeeRow(row, movement) {
+  if (row.source_id && String(row.source_id) === String(movement.id)) return true;
   const cash = extractCashFromNote(movement.nota, row.cassa || "contanti");
   const note = cleanMovementNoteForForm(movement.nota);
   return String(row.employee_id || "") === String(movement.employee_id || "")
@@ -3148,15 +3274,18 @@ function editSelectedAlertDay() {
 function renderDashboard() {
   const last = [...state.dailyRecords].sort((a,b)=>b.data.localeCompare(a.data))[0];
   const totals = last ? getDailyTotals(last) : { totalIncasso:0, totalCoperti:0 };
-  const alerts = [];
-  state.dailyRecords.forEach(r => validateDaily(r).forEach(text => alerts.push({ title:r.data, text })));
+  const allAlerts = [];
+  state.dailyRecords.forEach(r => validateDaily(r).forEach(text => allAlerts.push({ title:r.data, text })));
+  const alerts = allAlerts.filter(a => !isAlertAcknowledged(a.title, a.text));
   const balances = computeCashBalances();
   if (safeEl("kpiIncasso")) $("kpiIncasso").textContent = euro(totals.totalIncasso);
   if (safeEl("kpiCoperti")) $("kpiCoperti").textContent = totals.totalCoperti;
   if (safeEl("kpiFornitori")) $("kpiFornitori").textContent = state.suppliers.filter(s => supplierSuspeso(s) > 0).length;
   if (safeEl("kpiAlert")) $("kpiAlert").textContent = alerts.length;
   if (safeEl("alertsBox")) {
-    $("alertsBox").innerHTML = alerts.length ? alerts.map(a => `<div class="item alert-row" data-alert-date="${a.title}" style="cursor:pointer;"><div><strong>${a.title}</strong><small>${a.text}</small></div><div>Apri</div></div>`).join("") : `<div class="alert okline">Nessun alert attivo.</div>`;
+    $("alertsBox").innerHTML = alerts.length ? alerts.map((a, idx) => `<div class="item alert-row" data-alert-date="${a.title}" style="cursor:pointer;"><div><strong>${a.title}</strong><small>${escapeHtml(a.text)}</small></div><div class="toolbar"><button class="btn ghost alert-open-btn" data-alert-date="${a.title}" type="button">Apri</button><button class="btn ghost alert-ack-btn" data-alert-date="${a.title}" data-alert-idx="${idx}" type="button">Conferma</button></div></div>`).join("") : `<div class="alert okline">Nessun alert attivo in dashboard. Gli alert confermati restano visibili aprendo la scheda giornaliera.</div>`;
+    document.querySelectorAll(".alert-open-btn").forEach(btn => btn.addEventListener("click", (e)=>{ e.stopPropagation(); openAlertModalByDate(btn.dataset.alertDate); }));
+    document.querySelectorAll(".alert-ack-btn").forEach(btn => btn.addEventListener("click", (e)=>{ e.stopPropagation(); const a = alerts[Number(btn.dataset.alertIdx)]; if (a) acknowledgeAlert(a.title, a.text); }));
     document.querySelectorAll(".alert-row").forEach(row => row.addEventListener("click", ()=>openAlertModalByDate(row.dataset.alertDate)));
   }
   if (safeEl("cashSummary")) {
@@ -3196,12 +3325,14 @@ function renderDailyTable() {
       <td>${dailyMetricTotal(r, "menu")} / ${dailyMetricTotal(r, "supplementi")}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}">Alert</button>` : '<span class="ok">OK</span>'}
+        <button class="btn ghost day-pdf-btn" data-day-date="${r.data}" type="button">PDF</button>
         <button class="btn ghost danger-soft day-delete-btn" data-day-date="${r.data}">Elimina giorno completo</button>
       </td>
     </tr>`;
   }).join("");
   document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", ()=>openAlertModalByDate(btn.dataset.alertDate)));
   document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", ()=>loadDailyByDate(btn.dataset.dayDate)));
+  document.querySelectorAll(".day-pdf-btn").forEach(btn => btn.addEventListener("click", ()=>exportDailyRecordPdfByDate(btn.dataset.dayDate)));
   document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteDailyByDate(btn.dataset.dayDate)));
 }
 function renderCash() {
@@ -3386,8 +3517,9 @@ function renderEmployeeDetail() {
 function renderBookings() {
   const table = safeEl("banchettiTable");
   if (!table) return;
-  table.innerHTML = state.bookings.map(b=>`<tr>
-    <td>${b.data}</td>
+  const rows = [...(state.bookings || [])].sort((a,b) => String(a.data || "").localeCompare(String(b.data || "")) || String(a.ora || "").localeCompare(String(b.ora || "")));
+  table.innerHTML = rows.map(b=>`<tr class="${String(b.data || "") >= todayStr() ? 'booking-upcoming' : 'muted-row'}">
+    <td>${formatDateWithDay(b.data, true)}</td>
     <td>${b.nome}</td>
     <td>${b.adulti}+${b.bambini}</td>
     <td>${b.tipo}</td>
@@ -3985,6 +4117,132 @@ function downloadReportPdf(payload, mode = "simple") {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
+
+function buildBasicPdfDocument(title, lines = []) {
+  const W = 595, H = 842, margin = 36, lineH = 12, maxChars = 92;
+  const pages = [];
+  let ops = [];
+  function addPage(){ ops=[]; pages.push(ops); }
+  function py(y){ return H - y; }
+  function safeText(v){ return pdfEscape(v); }
+  function put(x,y,str,size=8,bold=false){ ops.push(`BT /${bold ? "F2" : "F1"} ${size} Tf ${x.toFixed(2)} ${py(y).toFixed(2)} Td (${safeText(str)}) Tj ET`); }
+  function wrapLine(line){
+    const clean = pdfCleanText(line || "");
+    if (!clean) return [""];
+    const out=[]; let cur="";
+    clean.split(" ").forEach(w=>{ if ((cur+" "+w).trim().length > maxChars) { out.push(cur); cur=w; } else cur=(cur+" "+w).trim(); });
+    if (cur) out.push(cur);
+    return out;
+  }
+  addPage();
+  let y=margin;
+  put(margin,y,title,14,true); y+=18;
+  put(margin,y,`Generato il ${formatDateTime(new Date().toISOString())}`,7,false); y+=18;
+  (lines || []).forEach(line => {
+    wrapLine(line).forEach(part => {
+      if (y > H - margin - 18) { put(W-margin-60,H-18,`Pagina ${pages.length}`,7,false); addPage(); y=margin; put(margin,y,title,10,true); y+=16; }
+      put(margin,y,part,8,false); y+=lineH;
+    });
+  });
+  put(W-margin-60,H-18,`Pagina ${pages.length}`,7,false);
+  const objects=[]; const addObj=c=>{objects.push(c); return objects.length;};
+  addObj("<< /Type /Catalog /Pages 2 0 R >>");
+  addObj("PAGES_PLACEHOLDER");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  addObj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  const pageIds=[];
+  pages.forEach(pageOps=>{ const content=pageOps.join("\n"); const contentId=addObj(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`); const pageId=addObj(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`); pageIds.push(pageId); });
+  objects[1]=`<< /Type /Pages /Kids [${pageIds.map(id=>`${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+  let pdf="%PDF-1.4\n"; const offsets=[0]; objects.forEach((obj,i)=>{ offsets.push(pdf.length); pdf += `${i+1} 0 obj\n${obj}\nendobj\n`; });
+  const xrefStart=pdf.length; pdf += `xref\n0 ${objects.length+1}\n0000000000 65535 f \n`; for(let i=1;i<=objects.length;i++) pdf += `${String(offsets[i]).padStart(10,"0")} 00000 n \n`; pdf += `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return pdf;
+}
+function downloadBasicPdf(title, lines, filename = "report.pdf") {
+  const pdf = buildBasicPdfDocument(title, lines);
+  const blob = new Blob([pdf], { type:"application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 4000);
+}
+function serviceLines(label, svc) {
+  const posLordo = n(svc?.pos);
+  const netto = netAmountForCash("pos", posLordo);
+  return [
+    `${label}:`,
+    `  Coperti ${n(svc?.coperti)} · Contanti ${euro(svc?.contanti)} · POS lordo ${euro(posLordo)} · POS netto ${euro(netto)}`,
+    `  Asporto ${euro(svc?.asporto)} · ${label} EUR ${euro(svc?.servizio)} · Bancone ${euro(svc?.bancone)}`,
+    `  Pizze ${n(svc?.pizze)} · Coperti rist. ${n(svc?.copertiRistorante)} · Menu ${n(svc?.menu)} · Supplementi ${n(svc?.supplementi)} · Portate ${n(svc?.portate)}`
+  ];
+}
+function exportDailyRecordPdfByDate(dateStr) {
+  const rec = (state.dailyRecords || []).find(r => String(r.data) === String(dateStr)) || (String(safeEl("gData")?.value || "") === String(dateStr) ? collectDailyFromForm() : null);
+  if (!rec || !rec.data) return showGlobalMessage("Scheda giornaliera non trovata.", "error");
+  const totals = getDailyTotals(rec);
+  const alerts = validateDaily(rec);
+  const lines = [
+    `Data: ${formatDateWithDay(rec.data, false)}`,
+    `Note: ${rec.note || "-"}`,
+    `Incasso lordo: ${euro(totals.totalIncasso)} · Incasso netto: ${euro(totals.totalIncassoNetto)} · Commissioni: ${euro(totals.totalCommissioni)} · Coperti: ${totals.totalCoperti}`,
+    "",
+    ...serviceLines("Pranzo", getService(rec, "pranzo")),
+    "",
+    ...serviceLines("Cena", getService(rec, "cena")),
+    "",
+    `Banchetti: ${countRealBanchetti(rec)}`,
+    ...getBanchettiList(rec).filter(b => countRealBanchetti({ banchettiList:[b] })).flatMap((b,i)=>["", ...serviceLines(b.nome || `Banchetto ${i+1}`, b)]),
+    "",
+    "Pagamenti fornitori:",
+    ...((rec.supplierPayments || []).length ? (rec.supplierPayments || []).map(p => `  ${p.supplier_name || p.supplier_search || p.new_supplier_name || "Fornitore"} · ${cashLabel(p.cassa)} · ${euro(p.importo)} · ${p.nota || ""}`) : ["  Nessuno"]),
+    "",
+    "Pagamenti dipendenti:",
+    ...((rec.employeePayments || []).length ? (rec.employeePayments || []).map(p => `  ${p.employee_name || p.employee_search || p.new_employee_name || "Dipendente"} · ${typeLabel(p.tipo)} · ${cashLabel(p.cassa)} · ${euro(p.importo)} · ${p.nota || ""}`) : ["  Nessuno"]),
+    "",
+    "Alert della scheda:",
+    ...(alerts.length ? alerts.map(a => `  - ${a}`) : ["  Nessun alert"])
+  ];
+  downloadBasicPdf(`Scheda giornaliera ${formatDate(rec.data)}`, lines, `scheda-giornaliera-${rec.data}.pdf`);
+}
+function exportCurrentDailyFormPdf() {
+  const date = safeEl("gData")?.value || todayStr();
+  const rec = collectDailyFromForm();
+  if (!rec.data) rec.data = date;
+  const old = state.dailyRecords.find(r => r.data === rec.data);
+  if (!old && !confirm("Questa scheda non risulta salvata. Vuoi esportare comunque i dati visibili nel modulo?")) return;
+  const saved = old ? JSON.stringify(old) : null;
+  if (!old) {
+    const tmp = rec;
+    const totals = getDailyTotals(tmp);
+    const lines = [`Data: ${formatDateWithDay(tmp.data, false)}`, `Incasso lordo ${euro(totals.totalIncasso)} · Netto ${euro(totals.totalIncassoNetto)}`, "", ...serviceLines("Pranzo", getService(tmp,"pranzo")), "", ...serviceLines("Cena", getService(tmp,"cena"))];
+    downloadBasicPdf(`Scheda giornaliera ${formatDate(tmp.data)}`, lines, `scheda-giornaliera-${tmp.data}.pdf`);
+    return;
+  }
+  exportDailyRecordPdfByDate(rec.data);
+}
+function exportSupplierDetailPdf() {
+  if (!selectedSupplierDetailId) return showGlobalMessage("Apri prima una scheda fornitore.", "error");
+  const supplier = state.suppliers.find(s => s.id === selectedSupplierDetailId);
+  const range = rangeFromOptionalInputs("supplierReportFrom", "supplierReportTo");
+  const moves = (state.supplierMovements || []).filter(m => m.supplier_id === selectedSupplierDetailId && dateInRange(m.data, range)).sort(sortMovementsChronological);
+  const daPagare = moves.filter(m => !isSupplierPaymentType(m.tipo)).reduce((a,b)=>a+n(b.importo),0);
+  const pagato = moves.filter(m => isSupplierPaymentType(m.tipo)).reduce((a,b)=>a+n(b.importo),0);
+  const lines = [`Fornitore: ${supplier?.nome || ""}`, `Periodo: ${formatDate(range.from)} -> ${formatDate(range.to)}`, `Da pagare nel periodo: ${euro(daPagare)}`, `Pagato nel periodo: ${euro(pagato)}`, `Saldo movimenti periodo: ${euro(daPagare - pagato)}`, "", "Movimenti:", ...(moves.length ? moves.map(m => `${formatDateWithDay(m.data,false)} · ${typeLabel(m.tipo)} · ${euro(m.importo)} · cassa ${cashLabel(businessMovementCash(m))} · ${cleanMovementNoteForForm(m.nota)}`) : ["Nessun movimento nel periodo."])];
+  downloadBasicPdf(`Scheda fornitore ${supplier?.nome || ""}`, lines, `fornitore-${pdfCleanText(supplier?.nome || "fornitore").toLowerCase().replace(/[^a-z0-9]+/g,"-")}.pdf`);
+}
+function exportEmployeeDetailPdf() {
+  if (!selectedEmployeeDetailId) return showGlobalMessage("Apri prima una scheda dipendente.", "error");
+  const employee = state.employees.find(e => e.id === selectedEmployeeDetailId);
+  const range = rangeFromOptionalInputs("employeeReportFrom", "employeeReportTo");
+  const moves = (state.employeeMovements || []).filter(m => m.employee_id === selectedEmployeeDetailId && dateInRange(m.data, range)).sort(sortMovementsChronological);
+  const pagato = moves.reduce((a,b)=>a+n(b.importo),0);
+  const lines = [`Dipendente: ${employee?.nome || ""}`, `Ruolo: ${employee?.ruolo || "-"}`, `Periodo: ${formatDate(range.from)} -> ${formatDate(range.to)}`, `Pagato nel periodo: ${euro(pagato)}`, `Dovuto mensile impostato: ${euro(employee?.dovuto_mensile)}`, "", "Movimenti:", ...(moves.length ? moves.map(m => `${formatDateWithDay(m.data,false)} · ${typeLabel(m.tipo)} · ${euro(m.importo)} · cassa ${cashLabel(businessMovementCash(m))} · ${cleanMovementNoteForForm(m.nota)}`) : ["Nessun movimento nel periodo."])];
+  downloadBasicPdf(`Scheda dipendente ${employee?.nome || ""}`, lines, `dipendente-${pdfCleanText(employee?.nome || "dipendente").toLowerCase().replace(/[^a-z0-9]+/g,"-")}.pdf`);
+}
+
 function exportCurrentReportPdf(mode = "simple") {
   if (!lastReportPayload) {
     showGlobalMessage("Genera prima un report.", "error");
@@ -4022,6 +4280,7 @@ function renderAll() {
   if (safeEl("navDitteBtn")) $("navDitteBtn").classList.toggle("hidden", !isSupervisor());
   renderDashboard();
   renderDailyTable();
+  renderMovementsSection();
   renderCash();
   renderSuppliers();
   renderEmployees();
@@ -4064,6 +4323,12 @@ function bindEvents() {
   safeEl("exportReportPdfBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
   safeEl("exportReportPdfSimpleBtn")?.addEventListener("click", () => exportCurrentReportPdf("simple"));
   safeEl("exportReportPdfDetailedBtn")?.addEventListener("click", () => exportCurrentReportPdf("detailed"));
+  safeEl("exportCurrentDayPdfBtn")?.addEventListener("click", exportCurrentDailyFormPdf);
+  safeEl("exportSupplierDetailPdfBtn")?.addEventListener("click", exportSupplierDetailPdf);
+  safeEl("exportEmployeeDetailPdfBtn")?.addEventListener("click", exportEmployeeDetailPdf);
+  safeEl("exportMovementsPdfBtn")?.addEventListener("click", exportMovementsPdf);
+  ["movFilterFrom","movFilterTo","movFilterType","movFilterSearch"].forEach(id => safeEl(id)?.addEventListener("input", renderMovementsSection));
+  safeEl("clearMovFiltersBtn")?.addEventListener("click", () => { ["movFilterFrom","movFilterTo","movFilterSearch"].forEach(id => { if (safeEl(id)) $(id).value = ""; }); if (safeEl("movFilterType")) $("movFilterType").value = "all"; renderMovementsSection(); });
   safeEl("addBanchettoRowBtn")?.addEventListener("click", ()=>{ addBanchettoRow({}); updateDailyCashAuto(); });
   safeEl("giornaliera")?.addEventListener("input", () => updateDailyCashAuto());
   safeEl("addDailySupplierPaymentBtn")?.addEventListener("click", ()=>addDailySupplierPaymentRow({}));
@@ -4092,6 +4357,27 @@ function bindEvents() {
   safeEl("cardAlert")?.addEventListener("click", ()=>{ navigate("dashboard"); const first=document.querySelector(".alert-row"); if(first) first.scrollIntoView({behavior:"smooth",block:"center"}); });
 }
 
+
+function isUserEditingForm() {
+  const el = document.activeElement;
+  if (!el) return false;
+  return ["INPUT","TEXTAREA","SELECT"].includes(el.tagName);
+}
+async function silentRefreshFromSupabase() {
+  if (silentRefreshInProgress || !state.activeCompany || isUserEditingForm()) return;
+  try {
+    silentRefreshInProgress = true;
+    if (isSupervisor()) await refreshCompaniesAdmin();
+    await loadCompanyData();
+    renderAll();
+    runCloudUiSyncCheck(true);
+  } catch (err) {
+    console.warn("Refresh automatico non riuscito", err);
+  } finally {
+    silentRefreshInProgress = false;
+  }
+}
+
 async function main() {
   try {
     bindEvents();
@@ -4104,6 +4390,9 @@ async function main() {
     window.setInterval(() => {
       if (!safeEl("appView")?.classList.contains("hidden")) runCloudUiSyncCheck(true);
     }, 60000);
+    window.setInterval(() => {
+      if (!safeEl("appView")?.classList.contains("hidden")) silentRefreshFromSupabase();
+    }, 180000);
     const ok = await initSupabase();
     if (!ok) return;
     supabase.auth.onAuthStateChange(async (_event, session)=>{ state.session = session; });

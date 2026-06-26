@@ -101,6 +101,7 @@
 
       <button class="nav-btn active" data-section="dashboard">Dashboard</button>
       <button class="nav-btn" data-section="giornaliera">Scheda giornaliera</button>
+      <button class="nav-btn" data-section="movimenti">Ultimi movimenti</button>
       <button class="nav-btn" data-section="casse">Casse</button>
       <button class="nav-btn" data-section="fornitori">Fornitori</button>
       <button class="nav-btn" data-section="dipendenti">Dipendenti</button>
@@ -169,7 +170,7 @@
         </div>
 
         <div class="split">
-          <div class="card">
+          <div class="card hidden">
             <div class="toolbar">
               <h3>Ultime modifiche / movimenti</h3>
               <div id="latestActivityCount" class="muted small"></div>
@@ -312,6 +313,7 @@
 
           <div class="toolbar save-toolbar">
             <div id="giornalieraFeedback" class="muted"></div>
+            <button class="secondary" id="exportCurrentDayPdfBtn" type="button">Scarica PDF scheda</button>
             <button id="saveDayBtn">Salva giornata e aggiorna schede</button>
           </div>
         </div>
@@ -324,6 +326,31 @@
                 <tr><th>Data</th><th>Salvata il</th><th>Coperti</th><th>Incasso</th><th>Pizze</th><th>Menù/Supp.</th><th>Azioni</th></tr>
               </thead>
               <tbody id="giorniTable"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="movimenti" class="section">
+        <div class="card">
+          <div class="toolbar">
+            <div>
+              <h3>Ultimi movimenti</h3>
+              <p class="muted small">Qui trovi tutte le modifiche e i movimenti collegati: schede giornaliere, fornitori, dipendenti e casse.</p>
+            </div>
+            <button id="exportMovementsPdfBtn" class="secondary" type="button">Scarica PDF movimenti</button>
+          </div>
+          <div class="grid4">
+            <div class="field"><label>Da data</label><input id="movFilterFrom" type="date" /></div>
+            <div class="field"><label>A data</label><input id="movFilterTo" type="date" /></div>
+            <div class="field"><label>Tipo movimento</label><select id="movFilterType"><option value="all">Tutti</option><option value="daily">Schede giornaliere</option><option value="supplier">Fornitori</option><option value="employee">Dipendenti</option><option value="cash">Casse manuali</option></select></div>
+            <div class="field"><label>Cerca</label><input id="movFilterSearch" placeholder="nome, importo, nota..." autocomplete="off" /></div>
+          </div>
+          <div class="toolbar"><div id="movimentiCount" class="muted small"></div><button id="clearMovFiltersBtn" class="secondary" type="button">Pulisci filtri</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Data</th><th>Tipo</th><th>Descrizione</th><th>Operazione</th><th>Salvato/modificato</th><th>Importo</th><th>Azioni</th></tr></thead>
+              <tbody id="movimentiGlobalTable"></tbody>
             </table>
           </div>
         </div>
@@ -437,7 +464,10 @@
               <h3 id="supplierDetailTitle">Scheda fornitore</h3>
               <p id="supplierDetailSubtitle" class="muted small"></p>
             </div>
-            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="supplierDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
+            <div class="field" style="min-width:150px;"><label>Filtra mese</label><input id="supplierDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
+            <div class="field" style="min-width:145px;"><label>PDF da</label><input id="supplierReportFrom" type="date" /></div>
+            <div class="field" style="min-width:145px;"><label>PDF a</label><input id="supplierReportTo" type="date" /></div>
+            <button id="exportSupplierDetailPdfBtn" class="secondary" type="button">Scarica PDF</button>
           </div>
           <div class="grid4" id="supplierDetailKpis"></div>
           <div class="card inner">
@@ -511,7 +541,10 @@
               <h3 id="employeeDetailTitle">Scheda dipendente</h3>
               <p id="employeeDetailSubtitle" class="muted small"></p>
             </div>
-            <div class="field" style="min-width:180px;"><label>Filtra mese</label><input id="employeeDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
+            <div class="field" style="min-width:150px;"><label>Filtra mese</label><input id="employeeDetailMonth" type="month" /><small class="muted">Vuoto = storico completo</small></div>
+            <div class="field" style="min-width:145px;"><label>PDF da</label><input id="employeeReportFrom" type="date" /></div>
+            <div class="field" style="min-width:145px;"><label>PDF a</label><input id="employeeReportTo" type="date" /></div>
+            <button id="exportEmployeeDetailPdfBtn" class="secondary" type="button">Scarica PDF</button>
           </div>
           <div class="grid4" id="employeeDetailKpis"></div>
           <div class="card inner">
