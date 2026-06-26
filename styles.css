@@ -500,3 +500,11 @@ input[type="checkbox"]{
 .report-table .alt-row{background:rgba(255,255,255,.035);}
 .report-table .weekend-row{background:rgba(248,113,113,.14);}
 @media (max-width:780px){.report-pdf-actions{width:100%;}.report-pdf-actions button{width:100%;}}
+
+/* V29: da telefono la dashboard mostra prima le casse */
+.dashboard-cash-first { margin-bottom: 16px; border: 2px solid rgba(37, 99, 235, 0.18); }
+@media (max-width: 760px) {
+  #dashboard .dashboard-cash-first { margin-top: 0; }
+  #cashSummary .item { align-items: flex-start; }
+  #cashSummary .cash-balance-total { font-size: 1.45rem; }
+}

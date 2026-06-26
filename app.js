@@ -2105,6 +2105,21 @@ async function fetchCompanyTable(table, orderColumn="created_at", ascending=true
   if (error) throw error;
   return data || [];
 }
+function latestDateValue(row) {
+  const raw = row?.saved_at || row?.created_at || row?.payload?.saved_at || "";
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+function dedupeDailyRecordsByDate(rows = []) {
+  const byDate = new Map();
+  (rows || []).forEach(row => {
+    const date = row.data || row.payload?.data;
+    if (!date) return;
+    const current = byDate.get(date);
+    if (!current || latestDateValue(row) >= latestDateValue(current)) byDate.set(date, row);
+  });
+  return Array.from(byDate.values()).sort((a, b) => String(a.data || a.payload?.data || "").localeCompare(String(b.data || b.payload?.data || "")));
+}
 async function loadCompanyData() {
   const [daily_records, cash_state, cash_movements, custom_cash_state, suppliers, supplier_movements, employees, employee_movements, bookings] = await Promise.all([
     fetchCompanyTable("daily_records", "data", true),
@@ -2117,7 +2132,7 @@ async function loadCompanyData() {
     fetchCompanyTable("employee_movements", "data", true),
     fetchCompanyTable("bookings", "data", true),
   ]);
-  state.dailyRecords = daily_records.map(r => ({ ...(r.payload || {}), saved_at: r.saved_at || r.created_at || r.payload?.saved_at || null }));
+  state.dailyRecords = dedupeDailyRecordsByDate(daily_records).map(r => ({ ...(r.payload || {}), data: r.data || r.payload?.data, saved_at: r.saved_at || r.created_at || r.payload?.saved_at || null }));
   state.cashMovements = cash_movements;
   state.customCashes = custom_cash_state || [];
   state.suppliers = suppliers;
@@ -2292,14 +2307,47 @@ async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, c
   await createCashOutMovement(data, cassa, importo, `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${nota ? " · " + nota : ""}`, operated_at);
 }
 
+async function deleteRowsByDate(table, dateStr) {
+  const { error } = await supabase
+    .from(table)
+    .delete()
+    .eq("company_id", state.activeCompany.id)
+    .eq("data", dateStr);
+  if (error) throw error;
+}
+async function deleteDailyRecordsForDate(dateStr) {
+  await deleteRowsByDate("daily_records", dateStr);
+}
 async function clearAutoLinkedMovementsForDate(dateStr) {
   const prefix = dailyAutoPrefix(dateStr);
-  const cash = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).like("descrizione", `${prefix}%`);
-  if (cash.error) throw cash.error;
-  const suppliers = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
-  if (suppliers.error) throw suppliers.error;
-  const employees = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
-  if (employees.error) throw employees.error;
+  const marker = `scheda giornaliera ${dateStr}`;
+
+  // Cancella tutti i movimenti creati automaticamente da una scheda giornaliera.
+  // Uso sia startsWith sul prefisso esatto sia una ricerca piu' larga, così eliminiamo anche
+  // eventuali righe vecchie salvate con formati leggermente diversi.
+  const cashExact = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).like("descrizione", `${prefix}%`);
+  if (cashExact.error) throw cashExact.error;
+  const cashLoose = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("descrizione", `%${marker}%`);
+  if (cashLoose.error) throw cashLoose.error;
+
+  const suppliersExact = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
+  if (suppliersExact.error) throw suppliersExact.error;
+  const suppliersLoose = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", `%${marker}%`);
+  if (suppliersLoose.error) throw suppliersLoose.error;
+
+  const employeesExact = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
+  if (employeesExact.error) throw employeesExact.error;
+  const employeesLoose = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", `%${marker}%`);
+  if (employeesLoose.error) throw employeesLoose.error;
+}
+async function purgeWholeDayFromSupabase(dateStr) {
+  // Cancellazione davvero completa della giornata: niente rimasugli in Supabase.
+  // Serve quando vuoi reinserire la giornata da zero.
+  await clearAutoLinkedMovementsForDate(dateStr);
+  await deleteRowsByDate("cash_movements", dateStr);
+  await deleteRowsByDate("supplier_movements", dateStr);
+  await deleteRowsByDate("employee_movements", dateStr);
+  await deleteDailyRecordsForDate(dateStr);
 }
 async function getOrCreateSupplierFromDaily(row) {
   const searched = findSupplierByNameOrAlias(row.supplier_search);
@@ -2434,11 +2482,20 @@ async function persistDailyRecord(rec) {
   try {
     const savedAt = new Date().toISOString();
     rec.saved_at = savedAt;
-    const first = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
+
+    // Prima di salvare una giornata, eliminiamo eventuali copie vecchie della stessa data.
+    // Questo evita che una giornata compaia due volte se Supabase ha già righe duplicate.
+    await clearAutoLinkedMovementsForDate(rec.data);
+    await deleteDailyRecordsForDate(rec.data);
+
+    const first = await supabase.from("daily_records").insert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt });
     if (first.error) throw first.error;
+
     await syncDailyLinkedMovements(rec);
+
     // Risalva la scheda dopo aver creato eventuali nuovi fornitori/dipendenti dalla scheda giornaliera.
-    const second = await supabase.from("daily_records").upsert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt }, { onConflict: "company_id,data" });
+    await deleteDailyRecordsForDate(rec.data);
+    const second = await supabase.from("daily_records").insert({ company_id: state.activeCompany.id, data: rec.data, payload: rec, saved_at: savedAt });
     if (second.error) throw second.error;
     return true;
   } catch (err) {
@@ -2474,45 +2531,29 @@ async function saveDaily() {
   await refreshData("Scheda giornaliera salvata.");
 }
 async function deleteDailyByDate(dateStr) {
-  if (!confirm(`Vuoi cancellare la scheda ${dateStr}? Verranno rimossi solo la scheda e i movimenti automatici creati da quella scheda.`)) return;
+  const msg = `Vuoi eliminare COMPLETAMENTE la giornata ${dateStr} da Supabase?
+
+Verranno rimossi:
+- scheda giornaliera
+- movimenti cassa del giorno
+- movimenti fornitori del giorno
+- movimenti dipendenti del giorno
+
+Non verranno cancellate le anagrafiche di fornitori e dipendenti.
+
+Dopo potrai reinserire la giornata da zero senza rimasugli.`;
+  if (!confirm(msg)) return;
+  if (!confirm(`Ultima conferma: eliminare davvero tutto il ${dateStr}?`)) return;
   try {
-    await clearAutoLinkedMovementsForDate(dateStr);
-    const { error } = await supabase.from("daily_records").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr);
-    if (error) throw error;
-    await refreshData("Scheda giornaliera cancellata con i movimenti automatici collegati.");
+    await purgeWholeDayFromSupabase(dateStr);
+    resetDailyForm();
+    await refreshData(`Giornata ${dateStr} eliminata completamente da Supabase. Ora puoi reinserirla da zero.`);
   } catch (err) {
     showGlobalMessage(err.message || String(err), "error");
   }
 }
 async function deleteWholeDayByDate(dateStr) {
-  const msg = `ATTENZIONE: vuoi eliminare TUTTO il giorno ${dateStr}?
-
-Verranno cancellati da Supabase:
-- scheda giornaliera
-- movimenti cassa della data
-- movimenti fornitori della data
-- movimenti dipendenti della data
-
-Non verranno cancellati fornitori e dipendenti come anagrafica.
-
-Usalo solo se vuoi reinserire quella giornata da zero.`;
-  if (!confirm(msg)) return;
-  if (!confirm(`Ultima conferma: eliminare davvero tutto il ${dateStr}?`)) return;
-  try {
-    const tables = ["cash_movements", "supplier_movements", "employee_movements", "daily_records"];
-    for (const table of tables) {
-      const { error } = await supabase
-        .from(table)
-        .delete()
-        .eq("company_id", state.activeCompany.id)
-        .eq("data", dateStr);
-      if (error) throw error;
-    }
-    resetDailyForm();
-    await refreshData(`Giornata ${dateStr} eliminata completamente. Ora puoi reinserirla da zero.`);
-  } catch (err) {
-    showGlobalMessage(err.message || String(err), "error");
-  }
+  return deleteDailyByDate(dateStr);
 }
 function loadDailyByDate(dateStr) {
   const rec = state.dailyRecords.find(r => r.data === dateStr);
@@ -3155,15 +3196,13 @@ function renderDailyTable() {
       <td>${dailyMetricTotal(r, "menu")} / ${dailyMetricTotal(r, "supplementi")}</td>
       <td style="display:flex;gap:8px;flex-wrap:wrap;">
         ${alerts.length ? `<button class="btn ghost day-alert-btn" data-alert-date="${r.data}">Alert</button>` : '<span class="ok">OK</span>'}
-        <button class="btn ghost day-delete-btn" data-day-date="${r.data}">Cancella scheda</button>
-        <button class="btn ghost danger-soft day-delete-full-btn" data-day-date="${r.data}">Elimina giorno intero</button>
+        <button class="btn ghost danger-soft day-delete-btn" data-day-date="${r.data}">Elimina giorno completo</button>
       </td>
     </tr>`;
   }).join("");
   document.querySelectorAll(".day-alert-btn").forEach(btn => btn.addEventListener("click", ()=>openAlertModalByDate(btn.dataset.alertDate)));
   document.querySelectorAll(".day-edit-btn").forEach(btn => btn.addEventListener("click", ()=>loadDailyByDate(btn.dataset.dayDate)));
   document.querySelectorAll(".day-delete-btn").forEach(btn => btn.addEventListener("click", ()=>deleteDailyByDate(btn.dataset.dayDate)));
-  document.querySelectorAll(".day-delete-full-btn").forEach(btn => btn.addEventListener("click", ()=>deleteWholeDayByDate(btn.dataset.dayDate)));
 }
 function renderCash() {
   if (safeEl("cashInitContanti")) $("cashInitContanti").value = inputNumberValue(state.cashInitial.contanti);
