@@ -37,6 +37,7 @@ let cloudSyncCheckInProgress = false;
 let lastReportPayload = null;
 let lastMovementsPayload = null;
 let silentRefreshInProgress = false;
+let automaticLinkedRepairInProgress = false;
 const ALERT_ACK_PREFIX = "gestionale_alert_ack_v30";
 
 const $ = (id) => document.getElementById(id);
@@ -366,6 +367,7 @@ function renderDashboardRecords() {
 function getCurrentMonthPrefix() { return todayStr().slice(0, 7); }
 function monthMatches(dateStr, monthPrefix) { return !monthPrefix || String(dateStr || "").startsWith(monthPrefix); }
 function dailyAutoPrefix(dateStr) { return `[scheda giornaliera ${dateStr}]`; }
+function movementSourceToken(kind, id) { return id ? `\u2063${kind}:${id}\u2063` : ""; }
 function escapeHtml(v) {
   return String(v ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch] || ch));
 }
@@ -705,12 +707,18 @@ function cleanMovementNoteForForm(text) {
   }
   return out;
 }
+function dailyAutoMarkerDate(row) {
+  const text = String(row?.nota || row?.descrizione || "");
+  const match = text.match(/scheda\s+giornaliera(?:\s+del)?\s+(\d{4}-\d{2}-\d{2})/i);
+  return match?.[1] || "";
+}
 function isDailyAutoMovement(row) {
-  return !!row?.data && isDailyAutoLinkedMovement(row, row.data);
+  return !!dailyAutoMarkerDate(row);
 }
 function isDailyAutoLinkedMovement(row, dateStr) {
-  const marker = dailyAutoPrefix(dateStr);
-  return String(row?.nota || row?.descrizione || "").startsWith(marker);
+  const markerDate = dailyAutoMarkerDate(row);
+  if (!markerDate) return false;
+  return !dateStr || String(markerDate) === String(dateStr);
 }
 function mergeDailyRowsBySource(baseRows = [], extraRows = []) {
   const out = [];
@@ -1288,6 +1296,11 @@ function exportMovementsPdf() {
 }
 
 function getMatchingCashOutMovementsForBusiness(kind, movement) {
+  const token = movementSourceToken(kind, movement?.id);
+  if (token) {
+    const tokenMatches = (state.cashMovements || []).filter(c => String(c.descrizione || "").includes(token));
+    if (tokenMatches.length) return tokenMatches;
+  }
   const name = kind === "supplier"
     ? (state.suppliers || []).find(s => s.id === movement.supplier_id)?.nome || ""
     : (state.employees || []).find(e => e.id === movement.employee_id)?.nome || "";
@@ -1382,7 +1395,7 @@ async function fetchCloudRawSnapshot() {
   return out;
 }
 function rawDailyPayloadRows(raw = {}) {
-  return (raw.daily_records || []).map(r => ({ ...(r.payload || {}), data: r.data || r.payload?.data, saved_at: r.saved_at || r.created_at || r.payload?.saved_at || null }));
+  return dedupeDailyRecordsByDate(raw.daily_records || []).map(r => ({ ...(r.payload || {}), data: r.data || r.payload?.data, saved_at: r.saved_at || r.created_at || r.payload?.saved_at || null }));
 }
 function idsFrom(rows = [], keyFn = (r) => r.id) {
   return new Set((rows || []).map(keyFn).filter(Boolean).map(String));
@@ -1534,6 +1547,9 @@ async function forceReloadFromSupabase() {
   try {
     if (safeEl("cloudSyncStatus")) $("cloudSyncStatus").textContent = "Ricaricamento completo da Supabase...";
     await loadCompanyData();
+    const legacyRepair = await rebuildExistingLinkedData();
+    const repaired = legacyRepair.repaired ? 0 : await repairDailyAutoResiduals();
+    if (legacyRepair.repaired || repaired) await loadCompanyData();
     renderAll();
     const issues = await runCloudUiSyncCheck(true);
     showGlobalMessage(issues.length ? "Dati ricaricati, ma ci sono problemi da verificare." : "Dati ricaricati da Supabase: tutto allineato.");
@@ -1938,34 +1954,46 @@ async function cleanupSafeDuplicates() {
     showGlobalMessage(err.message || String(err), "error");
   }
 }
+async function deleteRowsByIds(table, ids = []) {
+  const cleanIds = [...new Set((ids || []).filter(Boolean).map(String))];
+  if (!cleanIds.length) return;
+  const { error } = await supabase.from(table).delete().eq("company_id", state.activeCompany.id).in("id", cleanIds);
+  if (error) throw error;
+}
+async function deleteAllMatchingCashOutMovementsForBusiness(kind, movement) {
+  const matches = [...getMatchingCashOutMovementsForBusiness(kind, movement)];
+  if (isDailyAutoMovement(movement)) {
+    (state.cashMovements || []).filter(c => cashOutMatchesBusinessLoose(c, kind, movement)).forEach(c => {
+      if (!matches.some(x => String(x.id) === String(c.id))) matches.push(c);
+    });
+  }
+  await deleteRowsByIds("cash_movements", matches.map(x => x.id));
+  return matches.length;
+}
 async function deleteSupplierMovementById(id) {
   const m = (state.supplierMovements || []).find(x => String(x.id) === String(id));
   if (!m) return;
   const supplier = (state.suppliers || []).find(s => s.id === m.supplier_id);
-  if (!confirm(`Vuoi eliminare questo movimento fornitore?\n\n${supplier?.nome || "Fornitore"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nSe è un pagamento/acconto, verrà eliminata anche una uscita cassa collegata.`)) return;
+  if (!confirm(`Vuoi eliminare questo movimento fornitore?\n\n${supplier?.nome || "Fornitore"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nVerrà eliminato anche dalla scheda giornaliera e saranno rimosse tutte le uscite cassa collegate.`)) return;
   try {
-    if (isSupplierPaymentType(m.tipo)) {
-      const matches = getMatchingCashOutMovementsForBusiness("supplier", m).sort((a,b) => (b.saved_at || b.created_at || "").localeCompare(a.saved_at || a.created_at || ""));
-      if (matches[0]?.id) await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("id", matches[0].id);
-    }
-    if (isDailyAutoMovement(m)) await syncDailyPayloadAfterMovementEdit("supplier", m, {}, { keepInDaily: false });
+    if (isSupplierPaymentType(m.tipo)) await deleteAllMatchingCashOutMovementsForBusiness("supplier", m);
+    await syncDailyPayloadAfterMovementEdit("supplier", m, {}, { keepInDaily: false });
     const { error } = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("id", m.id);
     if (error) throw error;
-    await refreshData("Movimento fornitore eliminato e cassa aggiornata.");
+    await refreshData("Movimento fornitore eliminato da fornitore, giornata e cassa.");
   } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
 }
 async function deleteEmployeeMovementById(id) {
   const m = (state.employeeMovements || []).find(x => String(x.id) === String(id));
   if (!m) return;
   const employee = (state.employees || []).find(e => e.id === m.employee_id);
-  if (!confirm(`Vuoi eliminare questo movimento dipendente?\n\n${employee?.nome || "Dipendente"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nVerrà eliminata anche una uscita cassa collegata.`)) return;
+  if (!confirm(`Vuoi eliminare questo movimento dipendente?\n\n${employee?.nome || "Dipendente"} · ${m.data} · ${typeLabel(m.tipo)} · ${euro(m.importo)}\n\nVerrà eliminato anche dalla scheda giornaliera e saranno rimosse tutte le uscite cassa collegate.`)) return;
   try {
-    const matches = getMatchingCashOutMovementsForBusiness("employee", m).sort((a,b) => (b.saved_at || b.created_at || "").localeCompare(a.saved_at || a.created_at || ""));
-    if (matches[0]?.id) await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("id", matches[0].id);
-    if (isDailyAutoMovement(m)) await syncDailyPayloadAfterMovementEdit("employee", m, {}, { keepInDaily: false });
+    await deleteAllMatchingCashOutMovementsForBusiness("employee", m);
+    await syncDailyPayloadAfterMovementEdit("employee", m, {}, { keepInDaily: false });
     const { error } = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("id", m.id);
     if (error) throw error;
-    await refreshData("Movimento dipendente eliminato e cassa aggiornata.");
+    await refreshData("Movimento dipendente eliminato da dipendente, giornata e cassa.");
   } catch (err) { showGlobalMessage(err.message || String(err), "error"); }
 }
 
@@ -2329,9 +2357,14 @@ async function refreshData(message=null) {
   try {
     if (isSupervisor()) await refreshCompaniesAdmin();
     await loadCompanyData();
+    const legacyRepair = await rebuildExistingLinkedData();
+    const repaired = legacyRepair.repaired ? 0 : await repairDailyAutoResiduals();
+    if (legacyRepair.repaired || repaired) await loadCompanyData();
     renderAll();
     runCloudUiSyncCheck(true);
     if (message) showGlobalMessage(message);
+    else if (legacyRepair.repaired) showGlobalMessage(`Riparati automaticamente anche i dati già presenti: ${legacyRepair.dates} giornate riallineate con Supabase.`);
+    else if (repaired) showGlobalMessage(`Ripuliti automaticamente ${repaired} rimasugli collegati a schede giornaliere.`);
   } catch (err) {
     console.error(err);
     showGlobalMessage(err.message || "Errore caricamento dati", "error");
@@ -2461,10 +2494,10 @@ async function insertSupplierMovement({ supplierId, data, tipo, importo, nota, c
     saved_at: new Date().toISOString(),
     nota: cleanNota,
   };
-  const { error } = await supabase.from("supplier_movements").insert(payload);
+  const { data: inserted, error } = await supabase.from("supplier_movements").insert(payload).select("*").single();
   if (error) throw error;
   if (isSupplierPaymentType(tipo)) {
-    await createCashOutMovement(data, cassa, importo, `Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${nota ? " · " + nota : ""}`, operated_at);
+    await createCashOutMovement(data, cassa, importo, `${movementSourceToken("supplier", inserted?.id)} Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${nota ? " · " + nota : ""}`.trim(), operated_at);
   }
 }
 async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, cassa, operated_at }) {
@@ -2480,9 +2513,9 @@ async function insertEmployeeMovement({ employeeId, data, tipo, importo, nota, c
     saved_at: new Date().toISOString(),
     nota: cleanNota,
   };
-  const { error } = await supabase.from("employee_movements").insert(payload);
+  const { data: inserted, error } = await supabase.from("employee_movements").insert(payload).select("*").single();
   if (error) throw error;
-  await createCashOutMovement(data, cassa, importo, `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${nota ? " · " + nota : ""}`, operated_at);
+  await createCashOutMovement(data, cassa, importo, `${movementSourceToken("employee", inserted?.id)} ${typeLabel(tipo)} dipendente ${employee?.nome || ""}${nota ? " · " + nota : ""}`.trim(), operated_at);
 }
 
 async function deleteRowsByDate(table, dateStr) {
@@ -2498,24 +2531,23 @@ async function deleteDailyRecordsForDate(dateStr) {
 }
 async function clearAutoLinkedMovementsForDate(dateStr) {
   const prefix = dailyAutoPrefix(dateStr);
-  const marker = `scheda giornaliera ${dateStr}`;
+  const markerLoose = `%scheda giornaliera%${dateStr}%`;
 
-  // Cancella tutti i movimenti creati automaticamente da una scheda giornaliera.
-  // Uso sia startsWith sul prefisso esatto sia una ricerca piu' larga, così eliminiamo anche
-  // eventuali righe vecchie salvate con formati leggermente diversi.
+  // Cancella tutti i movimenti automatici della giornata, compresi quelli già presenti
+  // in Supabase e creati da versioni vecchie con note leggermente diverse.
   const cashExact = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).like("descrizione", `${prefix}%`);
   if (cashExact.error) throw cashExact.error;
-  const cashLoose = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("descrizione", `%${marker}%`);
+  const cashLoose = await supabase.from("cash_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("descrizione", markerLoose);
   if (cashLoose.error) throw cashLoose.error;
 
   const suppliersExact = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
   if (suppliersExact.error) throw suppliersExact.error;
-  const suppliersLoose = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", `%${marker}%`);
+  const suppliersLoose = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", markerLoose);
   if (suppliersLoose.error) throw suppliersLoose.error;
 
   const employeesExact = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).like("nota", `${prefix}%`);
   if (employeesExact.error) throw employeesExact.error;
-  const employeesLoose = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", `%${marker}%`);
+  const employeesLoose = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("data", dateStr).ilike("nota", markerLoose);
   if (employeesLoose.error) throw employeesLoose.error;
 }
 async function purgeWholeDayFromSupabase(dateStr) {
@@ -2561,17 +2593,213 @@ async function getOrCreateEmployeeFromDaily(row) {
   state.employees.push(data);
   return data;
 }
+function dailyRecordByDate(dateStr) {
+  return (state.dailyRecords || []).find(r => String(r.data || "") === String(dateStr || "")) || null;
+}
+function movementIsRepresentedInDaily(kind, movement) {
+  const day = dailyRecordByDate(movement.data);
+  if (!day) return false;
+  const rows = kind === "supplier" ? (day.supplierPayments || []) : (day.employeePayments || []);
+  return rows.some(row => kind === "supplier"
+    ? movementMatchesDailySupplierRow(row, movement)
+    : movementMatchesDailyEmployeeRow(row, movement));
+}
+function dailyAutoResidualPlan() {
+  const supplierMovements = (state.supplierMovements || []).filter(m => isSupplierPaymentType(m.tipo) && isDailyAutoMovement(m) && !movementIsRepresentedInDaily("supplier", m));
+  const employeeMovements = (state.employeeMovements || []).filter(m => isDailyAutoMovement(m) && !movementIsRepresentedInDaily("employee", m));
+  const cashIds = new Set();
+  supplierMovements.forEach(m => (state.cashMovements || []).filter(c => cashOutMatchesBusinessLoose(c, "supplier", m)).forEach(c => c.id && cashIds.add(c.id)));
+  employeeMovements.forEach(m => (state.cashMovements || []).filter(c => cashOutMatchesBusinessLoose(c, "employee", m)).forEach(c => c.id && cashIds.add(c.id)));
+  (state.cashMovements || []).filter(c => c.id && isDailyAutoLinkedMovement(c, c.data) && !dailyRecordByDate(c.data)).forEach(c => cashIds.add(c.id));
+  return {
+    supplierIds: supplierMovements.map(m => m.id).filter(Boolean),
+    employeeIds: employeeMovements.map(m => m.id).filter(Boolean),
+    cashIds: [...cashIds],
+    total: supplierMovements.length + employeeMovements.length + cashIds.size,
+  };
+}
+async function repairDailyAutoResiduals() {
+  if (automaticLinkedRepairInProgress || !state.activeCompany?.id) return 0;
+  const plan = dailyAutoResidualPlan();
+  if (!plan.total) return 0;
+  automaticLinkedRepairInProgress = true;
+  try {
+    await deleteRowsByIds("cash_movements", plan.cashIds);
+    await deleteRowsByIds("supplier_movements", plan.supplierIds);
+    await deleteRowsByIds("employee_movements", plan.employeeIds);
+    return plan.total;
+  } finally {
+    automaticLinkedRepairInProgress = false;
+  }
+}
+function dailyRowUsesExternalMovement(row, kind) {
+  return String(row?.source_kind || "") === `${kind}_movement` && !!row?.source_id;
+}
+function existingLinkedDataNeedsRepair() {
+  if (dailyAutoResidualPlan().total > 0) return true;
+  for (const day of (state.dailyRecords || [])) {
+    const expectedSuppliers = (day.supplierPayments || []).filter(row => !dailyRowUsesExternalMovement(row, "supplier"));
+    const expectedEmployees = (day.employeePayments || []).filter(row => !dailyRowUsesExternalMovement(row, "employee"));
+    const autoSuppliers = (state.supplierMovements || []).filter(m => String(dailyAutoMarkerDate(m)) === String(day.data) && isSupplierPaymentType(m.tipo));
+    const autoEmployees = (state.employeeMovements || []).filter(m => String(dailyAutoMarkerDate(m)) === String(day.data));
+    if (autoSuppliers.length !== expectedSuppliers.length || autoEmployees.length !== expectedEmployees.length) return true;
+    if (expectedSuppliers.some(row => !autoSuppliers.some(m => movementMatchesDailySupplierRow(row, m)))) return true;
+    if (expectedEmployees.some(row => !autoEmployees.some(m => movementMatchesDailyEmployeeRow(row, m)))) return true;
+  }
+  return false;
+}
+function allExistingLinkedDates() {
+  const dates = new Set((state.dailyRecords || []).map(r => r.data).filter(Boolean));
+  [...(state.supplierMovements || []), ...(state.employeeMovements || []), ...(state.cashMovements || [])].forEach(row => {
+    const markerDate = dailyAutoMarkerDate(row);
+    if (markerDate) dates.add(markerDate);
+  });
+  return [...dates].sort();
+}
+function clearDeletedAutoSourceReferences(rec) {
+  const copy = JSON.parse(JSON.stringify(rec));
+  copy.supplierPayments = (copy.supplierPayments || []).map(row => {
+    const movement = row.source_id ? (state.supplierMovements || []).find(m => String(m.id) === String(row.source_id)) : null;
+    if (movement && isDailyAutoMovement(movement)) return { ...row, source_id:"", source_kind:"" };
+    return row;
+  });
+  copy.employeePayments = (copy.employeePayments || []).map(row => {
+    const movement = row.source_id ? (state.employeeMovements || []).find(m => String(m.id) === String(row.source_id)) : null;
+    if (movement && isDailyAutoMovement(movement)) return { ...row, source_id:"", source_kind:"" };
+    return row;
+  });
+  return copy;
+}
+async function rebuildExistingLinkedData({ forceAll = false } = {}) {
+  if (automaticLinkedRepairInProgress || !state.activeCompany?.id) return { repaired:false, dates:0, orphanDates:0 };
+  if (!forceAll && !existingLinkedDataNeedsRepair()) return { repaired:false, dates:0, orphanDates:0 };
+  automaticLinkedRepairInProgress = true;
+  try {
+    const dates = allExistingLinkedDates();
+    let rebuiltDates = 0;
+    let orphanDates = 0;
+    for (const dateStr of dates) {
+      const stored = dailyRecordByDate(dateStr);
+      await clearAutoLinkedMovementsForDate(dateStr);
+      if (!stored) {
+        orphanDates += 1;
+        continue;
+      }
+      const rec = clearDeletedAutoSourceReferences(stored);
+      await syncDailyLinkedMovements(rec);
+      rec.saved_at = new Date().toISOString();
+      await deleteDailyRecordsForDate(dateStr);
+      const { error } = await supabase.from("daily_records").insert({
+        company_id: state.activeCompany.id,
+        data: dateStr,
+        payload: rec,
+        saved_at: rec.saved_at,
+      });
+      if (error) throw error;
+      rebuiltDates += 1;
+    }
+    return { repaired:true, dates:rebuiltDates, orphanDates };
+  } finally {
+    automaticLinkedRepairInProgress = false;
+  }
+}
+async function repairExistingLinkedDataManual() {
+  if (!confirm("Vuoi riparare anche tutti i dati già presenti in Supabase?\n\nIl gestionale userà le schede giornaliere attuali come riferimento, eliminerà i vecchi rimasugli automatici e ricreerà i collegamenti corretti con dipendenti, fornitori e casse.")) return;
+  try {
+    exportBackup();
+    if (safeEl("cloudSyncStatus")) $("cloudSyncStatus").textContent = "Riparazione completa dei dati esistenti in corso...";
+    await loadCompanyData();
+    const result = await rebuildExistingLinkedData({ forceAll:true });
+    await loadCompanyData();
+    renderAll();
+    const issues = await runCloudUiSyncCheck(true);
+    showGlobalMessage(`Riparazione completata: ${result.dates} giornate ricostruite${result.orphanDates ? `, ${result.orphanDates} date orfane ripulite` : ""}. ${issues.length ? "Restano controlli da verificare." : "Supabase e gestionale risultano allineati."}`);
+  } catch (err) {
+    console.error(err);
+    showGlobalMessage(err.message || String(err), "error");
+  }
+}
+async function reconcileExternalSourceMovementsFromDaily(rec) {
+  const supplierRowsById = new Map((rec.supplierPayments || []).filter(r => r.source_id).map(r => [String(r.source_id), r]));
+  const employeeRowsById = new Map((rec.employeePayments || []).filter(r => r.source_id).map(r => [String(r.source_id), r]));
+
+  for (const movement of (state.supplierMovements || []).filter(m => String(m.data) === String(rec.data) && isSupplierPaymentType(m.tipo) && !isDailyAutoMovement(m))) {
+    const row = supplierRowsById.get(String(movement.id));
+    if (!row) {
+      await deleteAllMatchingCashOutMovementsForBusiness("supplier", movement);
+      await deleteRowsByIds("supplier_movements", [movement.id]);
+      continue;
+    }
+    const newSupplierId = row.supplier_id || movement.supplier_id;
+    const newCash = row.cassa || "contanti";
+    const changed = String(newSupplierId) !== String(movement.supplier_id)
+      || !roughlySameMoney(row.importo, movement.importo)
+      || cleanDateTimeLocal(row.operated_at) !== cleanDateTimeLocal(movement.operated_at)
+      || normalizeSearchText(newCash) !== normalizeSearchText(businessMovementCash(movement))
+      || normalizeSearchText(row.nota || "") !== normalizeSearchText(cleanMovementNoteForForm(movement.nota));
+    if (!changed) continue;
+    await deleteAllMatchingCashOutMovementsForBusiness("supplier", movement);
+    const note = [row.nota || "", `cassa: ${newCash}`].filter(Boolean).join(" · ");
+    const { error } = await supabase.from("supplier_movements").update({
+      supplier_id: newSupplierId,
+      importo: n(row.importo),
+      operated_at: cleanDateTimeLocal(row.operated_at),
+      nota: note,
+      saved_at: new Date().toISOString(),
+    }).eq("company_id", state.activeCompany.id).eq("id", movement.id);
+    if (error) throw error;
+    const supplier = (state.suppliers || []).find(s => String(s.id) === String(newSupplierId));
+    await createCashOutMovement(rec.data, newCash, n(row.importo), `${movementSourceToken("supplier", movement.id)} Pagamento fornitore ${supplier?.nome || ""}${row.nota ? " · " + row.nota : ""}`.trim(), row.operated_at);
+  }
+
+  for (const movement of (state.employeeMovements || []).filter(m => String(m.data) === String(rec.data) && !isDailyAutoMovement(m))) {
+    const row = employeeRowsById.get(String(movement.id));
+    if (!row) {
+      await deleteAllMatchingCashOutMovementsForBusiness("employee", movement);
+      await deleteRowsByIds("employee_movements", [movement.id]);
+      continue;
+    }
+    const newEmployeeId = row.employee_id || movement.employee_id;
+    const newCash = row.cassa || "contanti";
+    const newType = row.tipo || "acconto";
+    const changed = String(newEmployeeId) !== String(movement.employee_id)
+      || String(newType) !== String(movement.tipo || "acconto")
+      || !roughlySameMoney(row.importo, movement.importo)
+      || cleanDateTimeLocal(row.operated_at) !== cleanDateTimeLocal(movement.operated_at)
+      || normalizeSearchText(newCash) !== normalizeSearchText(businessMovementCash(movement))
+      || normalizeSearchText(row.nota || "") !== normalizeSearchText(cleanMovementNoteForForm(movement.nota));
+    if (!changed) continue;
+    await deleteAllMatchingCashOutMovementsForBusiness("employee", movement);
+    const note = [row.nota || "", `cassa: ${newCash}`].filter(Boolean).join(" · ");
+    const { error } = await supabase.from("employee_movements").update({
+      employee_id: newEmployeeId,
+      tipo: newType,
+      importo: n(row.importo),
+      operated_at: cleanDateTimeLocal(row.operated_at),
+      nota: note,
+      saved_at: new Date().toISOString(),
+    }).eq("company_id", state.activeCompany.id).eq("id", movement.id);
+    if (error) throw error;
+    const employee = (state.employees || []).find(e => String(e.id) === String(newEmployeeId));
+    await createCashOutMovement(rec.data, newCash, n(row.importo), `${movementSourceToken("employee", movement.id)} ${typeLabel(newType)} dipendente ${employee?.nome || ""}${row.nota ? " · " + row.nota : ""}`.trim(), row.operated_at);
+  }
+}
+
 async function syncDailyLinkedMovements(rec) {
   const prefix = dailyAutoPrefix(rec.data);
   await clearAutoLinkedMovementsForDate(rec.data);
 
   const supplierRows = [];
   const supplierRowsToInsert = [];
-  for (const p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name || p.supplier_search) && n(p.importo) > 0)) {
+  for (let p of (rec.supplierPayments || []).filter(p => (p.supplier_id || p.new_supplier_name || p.supplier_search) && n(p.importo) > 0)) {
     if (p.source_id) {
+      const existingMovement = (state.supplierMovements || []).find(m => String(m.id) === String(p.source_id));
       const supplier = state.suppliers.find(s => s.id === p.supplier_id) || findSupplierByNameOrAlias(p.supplier_search);
-      if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome });
-      continue;
+      if (existingMovement && !isDailyAutoMovement(existingMovement)) {
+        if (supplier) supplierRows.push({ ...p, supplier_id: supplier.id, supplier_name: supplier.nome, source_kind: "supplier_movement" });
+        continue;
+      }
+      p = { ...p, source_id: "", source_kind: "" };
     }
     const supplier = await getOrCreateSupplierFromDaily(p);
     if (supplier) {
@@ -2583,11 +2811,15 @@ async function syncDailyLinkedMovements(rec) {
 
   const employeeRows = [];
   const employeeRowsToInsert = [];
-  for (const p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name || p.employee_search) && n(p.importo) > 0)) {
+  for (let p of (rec.employeePayments || []).filter(p => (p.employee_id || p.new_employee_name || p.employee_search) && n(p.importo) > 0)) {
     if (p.source_id) {
+      const existingMovement = (state.employeeMovements || []).find(m => String(m.id) === String(p.source_id));
       const employee = state.employees.find(e => e.id === p.employee_id);
-      if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome });
-      continue;
+      if (existingMovement && !isDailyAutoMovement(existingMovement)) {
+        if (employee) employeeRows.push({ ...p, employee_id: employee.id, employee_name: employee.nome, source_kind: "employee_movement" });
+        continue;
+      }
+      p = { ...p, source_id: "", source_kind: "" };
     }
     const employee = await getOrCreateEmployeeFromDaily(p);
     if (employee) {
@@ -2617,7 +2849,7 @@ async function syncDailyLinkedMovements(rec) {
       if (supplierRowsToInsert[idx]) supplierRowsToInsert[idx].source_id = m.id;
     });
 
-    const cashMovements = supplierRowsToInsert.map(p => ({
+    const cashMovements = supplierRowsToInsert.map((p, idx) => ({
       company_id: state.activeCompany.id,
       data: rec.data,
       cassa: p.cassa || "contanti",
@@ -2625,7 +2857,7 @@ async function syncDailyLinkedMovements(rec) {
       importo: n(p.importo),
       operated_at: cleanDateTimeLocal(p.operated_at),
       saved_at: new Date().toISOString(),
-      descrizione: `${prefix} Pagamento fornitore ${p.supplier_name || ""}${p.nota ? " · " + p.nota : ""}`,
+      descrizione: `${prefix} ${movementSourceToken("supplier", insertedSupplierMovements?.[idx]?.id)} Pagamento fornitore ${p.supplier_name || ""}${p.nota ? " · " + p.nota : ""}`.replace(/\s+/g, " ").trim(),
     }));
     const cashResult = await supabase.from("cash_movements").insert(cashMovements);
     if (cashResult.error) throw cashResult.error;
@@ -2648,7 +2880,7 @@ async function syncDailyLinkedMovements(rec) {
       if (employeeRowsToInsert[idx]) employeeRowsToInsert[idx].source_id = m.id;
     });
 
-    const cashMovements = employeeRowsToInsert.map(p => ({
+    const cashMovements = employeeRowsToInsert.map((p, idx) => ({
       company_id: state.activeCompany.id,
       data: rec.data,
       cassa: p.cassa || "contanti",
@@ -2656,7 +2888,7 @@ async function syncDailyLinkedMovements(rec) {
       importo: n(p.importo),
       operated_at: cleanDateTimeLocal(p.operated_at),
       saved_at: new Date().toISOString(),
-      descrizione: `${prefix} ${p.tipo || "acconto"} dipendente ${p.employee_name || ""}${p.nota ? " · " + p.nota : ""}`,
+      descrizione: `${prefix} ${movementSourceToken("employee", insertedEmployeeMovements?.[idx]?.id)} ${p.tipo || "acconto"} dipendente ${p.employee_name || ""}${p.nota ? " · " + p.nota : ""}`.replace(/\s+/g, " ").trim(),
     }));
     const cashResult = await supabase.from("cash_movements").insert(cashMovements);
     if (cashResult.error) throw cashResult.error;
@@ -2666,6 +2898,10 @@ async function persistDailyRecord(rec) {
   try {
     const savedAt = new Date().toISOString();
     rec.saved_at = savedAt;
+
+    // Prima sincronizziamo eventuali movimenti creati direttamente nelle schede
+    // fornitore/dipendente: se sono stati rimossi dalla giornata, spariscono anche lì e dalla cassa.
+    await reconcileExternalSourceMovementsFromDaily(rec);
 
     // Prima di salvare una giornata, eliminiamo eventuali copie vecchie della stessa data.
     // Questo evita che una giornata compaia due volte se Supabase ha già righe duplicate.
@@ -2805,17 +3041,23 @@ async function upsertDailyRecordPayload(rec) {
   if (error) throw error;
 }
 async function syncDailyPayloadAfterMovementEdit(kind, oldMovement, newPayload, { keepInDaily }) {
-  if (!isDailyAutoMovement(oldMovement)) return;
-  const oldRec = getDailyRecordForUpdate(oldMovement.data);
-  if (kind === "supplier") {
-    oldRec.supplierPayments = removeFirstMatchingDailyRow(oldRec.supplierPayments || [], row => movementMatchesDailySupplierRow(row, oldMovement));
-  } else {
-    oldRec.employeePayments = removeFirstMatchingDailyRow(oldRec.employeePayments || [], row => movementMatchesDailyEmployeeRow(row, oldMovement));
+  const oldStored = (state.dailyRecords || []).find(r => String(r.data) === String(oldMovement.data));
+  let oldRec = oldStored ? JSON.parse(JSON.stringify(oldStored)) : null;
+  if (oldRec) {
+    if (kind === "supplier") {
+      oldRec.supplierPayments = removeFirstMatchingDailyRow(oldRec.supplierPayments || [], row => movementMatchesDailySupplierRow(row, oldMovement));
+    } else {
+      oldRec.employeePayments = removeFirstMatchingDailyRow(oldRec.employeePayments || [], row => movementMatchesDailyEmployeeRow(row, oldMovement));
+    }
+    await upsertDailyRecordPayload(oldRec);
   }
-  await upsertDailyRecordPayload(oldRec);
 
   if (!keepInDaily) return;
-  const newRec = oldMovement.data === newPayload.data ? oldRec : getDailyRecordForUpdate(newPayload.data);
+  const targetStored = (state.dailyRecords || []).find(r => String(r.data) === String(newPayload.data));
+  if (!targetStored && !oldRec) return;
+  const newRec = oldRec && String(oldMovement.data) === String(newPayload.data)
+    ? oldRec
+    : JSON.parse(JSON.stringify(targetStored || emptyDailyRecordForDate(newPayload.data)));
   if (kind === "supplier") {
     const supplier = state.suppliers.find(s => s.id === newPayload.supplier_id);
     newRec.supplierPayments = (newRec.supplierPayments || []).concat({
@@ -2825,7 +3067,9 @@ async function syncDailyPayloadAfterMovementEdit(kind, oldMovement, newPayload, 
       cassa: newPayload.cassa || "contanti",
       importo: n(newPayload.importo),
       operated_at: cleanDateTimeLocal(newPayload.operated_at),
-      nota: newPayload.nota || ""
+      nota: newPayload.nota || "",
+      source_kind: "supplier_movement",
+      source_id: oldMovement.id || ""
     });
   } else {
     newRec.employeePayments = (newRec.employeePayments || []).concat({
@@ -2836,7 +3080,9 @@ async function syncDailyPayloadAfterMovementEdit(kind, oldMovement, newPayload, 
       cassa: newPayload.cassa || "contanti",
       importo: n(newPayload.importo),
       operated_at: cleanDateTimeLocal(newPayload.operated_at),
-      nota: newPayload.nota || ""
+      nota: newPayload.nota || "",
+      source_kind: "employee_movement",
+      source_id: oldMovement.id || ""
     });
   }
   await upsertDailyRecordPayload(newRec);
@@ -2893,13 +3139,13 @@ async function updateSupplierMovementFromDetail() {
   const { error } = await supabase.from("supplier_movements").update(payload).eq("company_id", state.activeCompany.id).eq("id", old.id);
   if (error) throw error;
 
-  if (isSupplierPaymentType(old.tipo)) await deleteMatchingCashOutMovement(old, "supplier");
+  if (isSupplierPaymentType(old.tipo)) await deleteAllMatchingCashOutMovementsForBusiness("supplier", old);
   if (isSupplierPaymentType(tipo)) {
     const supplier = state.suppliers.find(s => s.id === old.supplier_id);
     const desc = isDailyAutoMovement(old)
       ? `${dailyAutoPrefix(data)} Pagamento fornitore ${supplier?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`
       : `Pagamento fornitore ${supplier?.nome || ""} · ${typeLabel(tipo)}${notaPulita ? " · " + notaPulita : ""}`;
-    await createCashOutMovement(data, cassa, importo, desc, operated_at);
+    await createCashOutMovement(data, cassa, importo, `${movementSourceToken("supplier", old.id)} ${desc}`.trim(), operated_at);
   }
   await syncDailyPayloadAfterMovementEdit("supplier", old, { ...payload, supplier_id: old.supplier_id, cassa, nota: notaPulita }, { keepInDaily });
   editingSupplierMovementId = null;
@@ -2922,12 +3168,12 @@ async function updateEmployeeMovementFromDetail() {
   const { error } = await supabase.from("employee_movements").update(payload).eq("company_id", state.activeCompany.id).eq("id", old.id);
   if (error) throw error;
 
-  await deleteMatchingCashOutMovement(old, "employee");
+  await deleteAllMatchingCashOutMovementsForBusiness("employee", old);
   const employee = state.employees.find(e => e.id === old.employee_id);
   const desc = isDailyAutoMovement(old)
     ? `${dailyAutoPrefix(data)} ${tipo || "acconto"} dipendente ${employee?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`
     : `${typeLabel(tipo)} dipendente ${employee?.nome || ""}${notaPulita ? " · " + notaPulita : ""}`;
-  await createCashOutMovement(data, cassa, importo, desc, operated_at);
+  await createCashOutMovement(data, cassa, importo, `${movementSourceToken("employee", old.id)} ${desc}`.trim(), operated_at);
   await syncDailyPayloadAfterMovementEdit("employee", old, { ...payload, employee_id: old.employee_id, cassa, nota: notaPulita }, { keepInDaily: true });
   editingEmployeeMovementId = null;
   await refreshData("Movimento dipendente modificato.");
@@ -3034,7 +3280,7 @@ async function deleteSupplierByName(name) {
   try {
     const moves = (state.supplierMovements || []).filter(m => m.supplier_id === s.id);
     for (const m of moves.filter(m => isSupplierPaymentType(m.tipo))) {
-      await deleteMatchingCashOutMovement(m, "supplier");
+      await deleteAllMatchingCashOutMovementsForBusiness("supplier", m);
     }
     await removeSupplierFromDailyPayloads(s.id);
     const delMoves = await supabase.from("supplier_movements").delete().eq("company_id", state.activeCompany.id).eq("supplier_id", s.id);
@@ -3144,7 +3390,7 @@ async function deleteEmployeeByName(name) {
   try {
     const moves = (state.employeeMovements || []).filter(m => m.employee_id === e.id);
     for (const m of moves) {
-      await deleteMatchingCashOutMovement(m, "employee");
+      await deleteAllMatchingCashOutMovementsForBusiness("employee", m);
     }
     await removeEmployeeFromDailyPayloads(e.id);
     const delMoves = await supabase.from("employee_movements").delete().eq("company_id", state.activeCompany.id).eq("employee_id", e.id);
@@ -4402,6 +4648,7 @@ function bindEvents() {
   safeEl("cleanupSafeBtn")?.addEventListener("click", cleanupSafeDuplicates);
   safeEl("runCloudSyncBtn")?.addEventListener("click", () => runCloudUiSyncCheck(false));
   safeEl("forceCloudReloadBtn")?.addEventListener("click", forceReloadFromSupabase);
+  safeEl("repairExistingDataBtn")?.addEventListener("click", repairExistingLinkedDataManual);
   safeEl("renderDailyCashAuditBtn")?.addEventListener("click", renderDailyCashAudit);
   safeEl("recalculateDailyCashBtn")?.addEventListener("click", recalculateDailyCashFromServices);
   safeEl("backupBtn")?.addEventListener("click", exportBackup);
@@ -4430,6 +4677,9 @@ async function silentRefreshFromSupabase() {
     silentRefreshInProgress = true;
     if (isSupervisor()) await refreshCompaniesAdmin();
     await loadCompanyData();
+    const legacyRepair = await rebuildExistingLinkedData();
+    const repaired = legacyRepair.repaired ? 0 : await repairDailyAutoResiduals();
+    if (legacyRepair.repaired || repaired) await loadCompanyData();
     renderAll();
     runCloudUiSyncCheck(true);
   } catch (err) {

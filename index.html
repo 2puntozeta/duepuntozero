@@ -205,11 +205,12 @@
           <div class="toolbar">
             <div>
               <h3>Controllo Supabase / sito</h3>
-              <p class="muted small" style="margin:4px 0 0 0;">Verifica che quello che conta la cassa sia presente sia nei dati caricati dal sito sia nel database Supabase.</p>
+              <p class="muted small" style="margin:4px 0 0 0;">Verifica che quello che conta la cassa sia presente sia nel sito sia in Supabase. La V33 ripara anche i vecchi dati già presenti, non soltanto i nuovi movimenti.</p>
             </div>
             <div class="toolbar">
               <button id="runCloudSyncBtn" class="secondary" type="button">Controlla ora</button>
               <button id="forceCloudReloadBtn" class="secondary" type="button">Ricarica da Supabase</button>
+              <button id="repairExistingDataBtn" class="secondary danger-soft" type="button">Ripara dati già presenti</button>
             </div>
           </div>
           <div id="cloudSyncStatus" class="muted small" style="margin-top:8px;">Controllo non ancora eseguito.</div>
